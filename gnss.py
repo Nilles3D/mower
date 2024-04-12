@@ -61,7 +61,20 @@ def getPosition():
     
     return myPosition
     
-
+def send_packet(self, frame, size):
+    #credit: https://github.com/ClemensElflein/xbot_driver_gps/blob/main/src/ublox_gps_interface.cpp#L128
+    #setup
+    frame[0] = 0xb5
+    frame[1] = 0x62
+    length_ptr = frame[4:6]
+    length_ptr[0] = size - 8
+    #checksum
+    ck_a, ck_b = calculate_checksum(frame[2:size-2], size-4)
+    frame[size-2] = ck_a
+    frame[size-1] = ck_b
+    #shortcut to send
+    serGPIO.write(bytes(frame))
+    return
 
 def sendWT(wtL,wtR,timestamp):
     #compose message for sending integer Left and Right Wheel Ticks
@@ -81,7 +94,6 @@ def sendWT(wtL,wtR,timestamp):
     endL=0 if fwdL else 1
     endR=0 if fwdR else 1
 
-    
     #Compose and send message
     frame = bytearray(8 + 2 * 4 + 8)
     
