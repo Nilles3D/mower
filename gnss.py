@@ -11,6 +11,7 @@
 from ublox_gps import UbloxGps
 from radioSerial import serLocalGPIO
 import struct
+import time
 
 
 #Serial inic
@@ -20,16 +21,15 @@ gps=UbloxGps(serGPIO)
 acabar=0.5 #sec
 
 def despertar():
-    #Get first GPS lock
-    gnssLock=False
-    timeGnssLock=time.time
-    while (not gnssLock) and (time.time-timeGnssLock<=10*acabar):
-        #prompt startups
+    #Get first GPS response
+    gnssUp=False
+    timeGnssUp=time.time
+    while (not gnssUp) and (time.time-timeGnssUp<=10*acabar):
         rfAnt=gps.rf_ant_status()
         modState=gps.module_wake_state()
-        #gnssLock=((rfAnt.pAcc>0.1) or (modState.prRes>0.1))
-        time.wait(0.1)
-    return gnssLock
+        gnssUp=((rfAnt.pAcc>0.1) or (modState.prRes>0.1))
+        time.wait(1)
+    return gnssUp
 
 def gnssIniciar():
     
@@ -38,6 +38,9 @@ def gnssIniciar():
     #basics
     gps_time=gps.date_time()
     gps_time_str='UTC Time {}:{}:{}'.format(gps_time.hour,gps_time.min,gps_time.sec)
+
+    #CFG spec
+    #sin desarollo
     
     return gps_time_str
 
@@ -60,8 +63,20 @@ def getPosition():
     myPosition=[gObj.lat,gObj.lon]
     
     return myPosition
+
+def calculate_checksum(ubxcmd):
+    #credit: https://github.com/ClemensElflein/xbot_driver_gps/blob/main/src/ublox_gps_interface.cpp#L128
+    #credit: https://github.com/cturvey/RandomNinjaChef/blob/main/uBloxRLMwheelticks.c
+    ck_a=0
+    ck_b=0
     
-def send_packet(self, frame, size):
+    for i in ubxcmd:
+        ck_a+=i
+        ck_b+=ck_a
+        
+    return ck_a, ck_b
+
+def send_packet(frame, size):
     #credit: https://github.com/ClemensElflein/xbot_driver_gps/blob/main/src/ublox_gps_interface.cpp#L128
     #setup
     frame[0] = 0xb5
@@ -69,16 +84,25 @@ def send_packet(self, frame, size):
     length_ptr = frame[4:6]
     length_ptr[0] = size - 8
     #checksum
-    ck_a, ck_b = calculate_checksum(frame[2:size-2], size-4)
+    ck_a, ck_b = calculate_checksum(frame[2:size-2])
     frame[size-2] = ck_a
     frame[size-1] = ck_b
-    #shortcut to send
+    #send straight to serial object
     serGPIO.write(bytes(frame))
     return
 
-def sendWT(wtL,wtR,timestamp):
+def send_UBX(buffer):
+    #credit: https://github.com/cturvey/RandomNinjaChef/blob/main/uBloxChecksum.c
+    buffLen=size(buffer)
+    ckA, ckB=calculate_checksum(buffer)
+    buffer[buffLen-2]=ckA
+    buffer[buffLen-1]=ckB
+    serGPIO.write(bytes(buffer))
+    return
+
+def sendWT_xbot(wtL, wtR, ttag):
     #compose message for sending integer Left and Right Wheel Ticks
-    # where 1 WT  = 5 cm of linear travel
+    # where 1 WT <= 5 cm of linear travel
     #return nothing
     #credit: https://github.com/ClemensElflein/xbot_driver_gps/blob/main/src/ublox_gps_interface.cpp#L128
 
@@ -98,26 +122,23 @@ def sendWT(wtL,wtR,timestamp):
     frame = bytearray(8 + 2 * 4 + 8)
     
     # Set the message class and ID
-    frame[2] = 0x10
+    frame[2] = 0x10 # ESF-MEAS
     frame[3] = 0x02
 
     #Begin payload construction
     payload = struct.unpack_from('IIII', frame, 6)
-    payload[0] = timestamp
-    # flags etc, it's all 0
-    payload[1] = 0
+    payload[0] = ttag #timestamp
+    payload[1] = 0 #flags
+    
+    left_rear = bit22L & 0x7FFFFF
+    left_rear |= 1 << 23 if fwdL
+    left_rear |= 8 << 24 # Sensor 8
+    payload[2] = left_rear
 
-    data_left = bit22L & 0x7FFFFF
-    if fwdL:
-        data_left |= 1 << 23
-    data_left |= 8 << 24
-    payload[2] = data_left
-
-    data_right = bti22R & 0x7FFFFF
-    if fwdR:
-        data_right |= 1 << 23
-    data_right |= 9 << 24
-    payload[3] = data_right
+    right_rear = bit22R & 0x7FFFFF
+    right_rear |= 1 << 23 if fwdR
+    right_rear |= 9 << 24 # Sensor 9
+    payload[3] = right_rear
 
     #Send payload
     struct.pack_into('IIII', frame, 6, *payload)
@@ -125,6 +146,38 @@ def sendWT(wtL,wtR,timestamp):
     
     return
 
+def sendWT_ninja(left_rear, right_rear, ttag):
+    #compose message for sending integer Left and Right Wheel Ticks
+    # where 1 WT <= 5 cm of linear travel
+    #return nothing
+    #credit: https://github.com/ClemensElflein/xbot_driver_gps/blob/main/src/ublox_gps_interface.cpp#L128
+    
+    length = 16
+    ubxcmd = bytearray(8 + 16)
+    u = struct.unpack_from('4I', ubxcmd, 6)  # payload
+
+    ubxcmd[0] = 0xB5
+    ubxcmd[1] = 0x62
+
+    ubxcmd[2] = 0x10  # ESF-MEAS
+    ubxcmd[3] = 0x02
+
+    ubxcmd[4] = length % 256
+    ubxcmd[5] = length // 256
+
+    if left_rear & 0x80000000:
+        left_rear = -left_rear | 0x800000  # sign to bit 23, positive tick count 0..22
+    if right_rear & 0x80000000:
+        right_rear = -right_rear | 0x800000
+
+    u[0] = ttag  # Timestamp in your MCU time-line, receiver will add it's own upon reception
+    u[1] = (2 << 11)  # Flags/Id, Two Sensors
+    u[2] = (left_rear & 0x00FFFFFF) | (8 << 24)  # Sensor 8 : Left-Rear Wheel Tick
+    u[3] = (right_rear & 0x00FFFFFF) | (9 << 24)  # Sensor 9 : Right-Rear Wheel Tick
+
+    # Sums and sends...
+    send_UBX(ubxcmd)
+    return
 
 if __name__ == '__main__':
     print(iniciar())
