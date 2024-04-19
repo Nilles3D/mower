@@ -57,10 +57,10 @@ ledProcess=gp.LED(20) #amarillo, recordar o autonomo
 ledGNSS=gp.LED(26) #azul
 ledMotores=gp.LED(16) #verde
 ledBeacon=gp.LED(19) #beacon's relay (blanco en pruebas)
-btnRecordar=gp.Button(pin=27,pull_up=False)
-btnCortar=gp.Button(pin=17,pull_up=False)
-potLeft=gp.MCP3008(channel=0)
-potRight=gp.MCP3008(channel=1)
+btnRecordar=gp.Button(pin=27,pull_up=True)
+btnCortar=gp.Button(pin=17,pull_up=True)
+potLeft=gp.MCP3008(channel=3)
+potRight=gp.MCP3008(channel=2)
 
 
 def ctrlLuces(io): 
@@ -74,8 +74,8 @@ def ctrlLuces(io):
     for l in todoPins:
         if io:
             print('_ctrlLuces iniciando '+str(l.pin))
-            l.on()
-            #time.sleep(0.5)
+            # ~ l.on() #probando
+            l.blink(on_time=0.1,off_time=0.1,n=1)
         else:
             print('_ctrlLuces apagando '+str(l.pin))
             l.off()
@@ -100,13 +100,15 @@ def numRollingAvg(myList,myIndex,myValue):
     #given list of numbers, index of list to update, value to update that to
     #returns list with changed number, the next index in sequence, and the average of the changed list
     
-    try:
-        myList[myIndex]=myValue
-        myIndex+=1
-        if myIndex>len(myList)-1: myIndex=0
-        rolledAvg=statistics.fmean(myList)
-    except:
-        rolledAvg=None
+    # ~ try:
+    # ~ print(f'numRollingAvg myList antes: {myList}')
+    myList[myIndex]=myValue
+    myIndex+=1
+    if myIndex>len(myList)-1: myIndex=0
+    rolledAvg=statistics.fmean(myList)
+    # ~ print(f'numRollingAvg myList despues: {myList}')
+    # ~ except:
+        # ~ rolledAvg=None
     
     return myList, myIndex, rolledAvg
 
@@ -124,36 +126,50 @@ def cambiaControl(ratoSus=0):
     global velL, velR
     #suave
     histLeft=[0.001 for i in range(4)]
-    histRight=histLeft
+    histRight=[0.002 for i in range(4)]
     histIndexL=0
     histIndexR=0
     adcLeft=0
     adcRight=0
+    potLeftBase=0.594
+    potLeftArriba=0.826
+    potRightBase=0.607
+    potRightArriba=0.887
+    mm=0
+    mn=100
+    avl=[]
     
     while (btnRecordar.is_pressed==True) and (not motoPara.is_set()) and (not ratoFin):
+        print('__')
         #read and map pot switches to controller values
-        adcLeft+=100#=(potLeft.value*5000-500)/(1500-500)*480
-        adcRight-=100#=(potRight.value*5000-500)/(1500-500)*480
-        histLeft,histIndexL,avgLeft=numRollingAvg(histLeft,histIndexL,adcLeft)
-        histRight,histIndexR,avgRight=numRollingAvg(histRight,histIndexR,adcRight)
+        adcLeft=potLeft.value
+        adcRight=potRight.value
+        # ~ tuneval=adcRight
+        # ~ mn=min(mn,tuneval)
+        # ~ mm=max(mm,tuneval)
+        # ~ avl.append(tuneval)
+        cmdLeft=(adcLeft-potLeftBase)/(potLeftArriba-potLeftBase)*480
+        cmdRight=(adcRight-potRightBase)/(potRightArriba-potRightBase)*480
+        histLeft,histIndexL,avgLeft=numRollingAvg(histLeft,histIndexL,cmdLeft)
+        histRight,histIndexR,avgRight=numRollingAvg(histRight,histIndexR,cmdRight)
         #send inputs to controller
         velL,velR=motores.motCtrl(avgLeft,avgRight)
-        # ~ print('adcLeft='+str(adcLeft))
-        # ~ print('adcRight='+str(adcRight))
-        # ~ print('avgs='+str([round(avgLeft,1),round(avgRight,1)]))
-        # ~ print('vels='+str([velL, velR]))
-        
+        print('adcLeft='+str(adcLeft))
+        print('adcRight='+str(adcRight))
+        print('avgs='+str([round(avgLeft,2),round(avgRight,2)]))
+        print('vels='+str([velL, velR]))
+                
         #throw timeout flag
         timeElapsed=time.time()-timeCambia
-        # ~ print('ET='+str(round(timeElapsed,2)))
-        if ((avgLeft<0.001) and (avgRight<0.001)):
+        print('ET='+str(round(timeElapsed,2)))
+        if ((avgLeft<0.15*480) and (avgRight<0.20*480)):
             if (not shutStart) and (ratoSus>0):
-                print(' Throttle shutdown bandera thrown at '+str(round(timeElapsed,1)))
+                print(' Throttle shutdown bandera sacado en '+str(round(timeElapsed,1)))
                 timeCambia=time.time()
                 shutStart=True
         else:
             if shutStart and ratoSus>0:
-                print(' Throttle shutdown bandera cleared at '+str(round(timeElapsed,1)))
+                print(' Throttle shutdown bandera despejado en '+str(round(timeElapsed,1)))
                 shutStart=False
         ratoFin=((ratoSus>0) and (time.time()-timeCambia>ratoSus) and shutStart)
         #don't overload anything
@@ -168,6 +184,14 @@ def cambiaControl(ratoSus=0):
     if ratoFin:
         print('  ratoFin')
     
+    # ~ print(f'min: {mn}')
+    # ~ print(f'max: {mm}')
+    # ~ mf=statistics.fmean(avl)
+    # ~ print(f'avg: {mf}')
+    # ~ mb=potLeftBase if tuneval==adcLeft else potRightBase
+    # ~ ma=potLeftArriba if tuneval==adcLeft else potRightArriba
+    # ~ print(f'alp: {(mf-mb)/(ma-mb)}')
+    
     #shutdown
     ledMotores.blink(on_time=onTime,off_time=offShort,n=4)
     
@@ -180,8 +204,13 @@ def enviarTicks():
     global velL, velR
     
     rato1=1/10#s, GNSS receiving limit
-    tickMult=(50*(2*3.14159/1)*(1/60)*(34.4/2))/5/480*rato1
-        #(max RPM*(2*pi rad / rev)*(min / 60 s)*(dia cm/2))/5cm/max command*time
+    tickMult=(50*(2*3.14159/1)*(1/60)*(20/36)*(34.4/2))/0.01/480*rato1
+    '''tick mult = scaled motor RPM to linear travel 
+     = (max motor RPM*(2*pi rad / rev)*(min / 60 s)* _
+      (gear pinion / gear rack)*(wheel dia cm/2))* _ 
+      /100um/max command * time
+     = approx. 1/480 
+    '''
     
     while not motoPara.is_set():
         time.sleep(rato1)
@@ -272,6 +301,9 @@ def mowerPara(errStop):
     #cut engines
     motores.motPara()
     motoPara.set()
+    global velL, velR
+    velL=0
+    velR=0
     #release GNSS
     gnss.gnssParar()
     #stop lights
@@ -496,7 +528,7 @@ if __name__ == '__main__':
         # ~ print(dd[0]+1)
         
     #probando numRollingAvg
-    # ~ chkList=[i for i in range(5)]
+    # ~ chkList=[i/10 for i in range(5)]
     # ~ k=0
     # ~ for j in chkList:
         # ~ chkList,k,a=numRollingAvg(chkList,k,j+1)
@@ -509,7 +541,7 @@ if __name__ == '__main__':
     # ~ ledMotores.on()
     # ~ time.sleep(1)
     # ~ ctrlLuces(True)
-    # ~ time.sleep(10)
+    # ~ time.sleep(2)
     # ~ ctrlLuces(False)
     # ~ todoPins=(ledError,ledProcess,ledGNSS,ledMotores, ledBeacon)
     # ~ for l in todoPins:
@@ -536,6 +568,12 @@ if __name__ == '__main__':
     # ~ ccT.join()
     # ~ lcT.join()
     # ~ prT.join()
+    
+    #probando enviarTicks
+    # ~ enviarTicks()
+    
+    #probando cambiaControl
+    # ~ cambiaControl(10)
     
     # ~ prPara.set()
     print('__prueba completa__')
