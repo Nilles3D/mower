@@ -159,6 +159,9 @@ class GNSSSkeletonApp:
         :param Queue sendqueue: queue for messages to send to receiver
         """
         print("gnss2    GNSS read_loop start")
+        
+        gdata0=None
+        pdata0=None
 
         ubr = UBXReader(
             stream, protfilter=(NMEA_PROTOCOL | UBX_PROTOCOL | RTCM3_PROTOCOL)
@@ -188,6 +191,17 @@ class GNSSSkeletonApp:
                                 print(f"gnss2   GNSS>> {parsed_data.identity}{nty}")
                             else:
                                 print(f"gnss2   GNSS+> {parsed_data}")
+                            
+                            #packet visualization
+                            gdata=[self.lat, self.lon, self.alt, self.heading, self.fixType]
+                            if gdata1!=gdata0:
+                                print("gnss2    lat, lon, alt, heading, fix")
+                                print(f"gnss2   {gdata1}")
+                                gdata0=gdata1
+                            pdata1=parsed_data
+                            if pdata1!=pdata0:
+                                print(f"gnss2   parsed: {pdata1}")
+                                pdata0=pdata1
 
                 # send any queued output data to receiver
                 self._send_data(ubr.datastream, sendqueue, verbose)
@@ -257,9 +271,9 @@ class GNSSSkeletonApp:
                     if verbose:
                         source = "NTRIP>>" if isinstance(parsed, RTCMMessage) else "GNSS<<"
                         if self.idonly:
-                            print(f"gnss2   {source} {parsed.identity}")
+                            print(f"gnss2   Sending {source} {parsed.identity}")
                         else:
-                            print(f"gnss2   {parsed}")
+                            print(f"gnss2   Sending {parsed}")
                     stream.write(raw)
                     sendqueue.task_done()
             except Empty:

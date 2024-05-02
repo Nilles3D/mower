@@ -62,7 +62,7 @@ gnssFix=threading.Event()
 # ~ ledProcess=gp.LED(20) #amarillo, recordar o autonomo
 # ~ ledGNSS=gp.LED(26) #azul
 # ~ ledMotores=gp.LED(16) #verde
-ledBeacon=gp.LED(19)#,initial_value=None,active_high=False) #beacon's relay (blanco en pruebas)
+#ledBeacon=gp.LED(19)#,initial_value=None,active_high=False) #beacon's relay (blanco en pruebas)
 btnRecordar=gp.Button(pin=27,pull_up=True)
 btnCortar=gp.Button(pin=17,pull_up=True)
 potLeft=gp.MCP3008(channel=3)
@@ -493,6 +493,10 @@ def cortar(datPointList):
     velAvg=[velCurr for i in range(100)]
     velAvgIndex=0
     timeSpdPrev=time.time()
+    headListIMU=[gpsHead+1 for i in range(12)]
+    headIndexIMU=0
+    headListPoints=[gpsHead-1 for i in range(12)]
+    headIndexPoints=0
     #signal and start
     ledProcess.blink(onTime,offLong)
     for datPoint in datPointList:
@@ -518,16 +522,18 @@ def cortar(datPointList):
                     #get gnss given heading
                     # ~ degHeadingGNSS=gnss.getHeading() #brujula degrees
                     degHeadingGNSS=gnaObj.heading()
+                    headListIMU, headIndexIMU, degHeadGNSSAvg = numRollingAvg(headListIMU,headIndexIMU,degHeadingGNSS)
                     timeSpdCurr=time.time() #for later
                     #determine actual heading
                     degHeadingActual=gc.numRumbo(gpsPointPrev,gpsPointCurr) #deg
-                    if abs(numGirar(degHeadingActual,degHeadingGNSS))>30:
+                    headListPoints,headIndexPoints,degHeadActualAvg=numRollingAvg(headListPoints,headIndexPoints,degHeadingActual)
+                    if abs(numGirar(degHeadActualAvg,degHeadGNSSAvg))>30:
                         # ~ ledError.blink(on_time=onTime,off_time=flashMedium,n=10)
                         print('mower    !!! GNSS que necesita ajuste, o giramos rapidamente.')
-                        print('mower         Rumbo observado: '+str(round(degHeadingGNSS)))
-                        print('mower         Rumbo calculado: '+str(round(degHeadingActual)))
+                        print('mower         Rumbo observado: '+str(round(degHeadGNSSAvg)))
+                        print('mower         Rumbo calculado: '+str(round(degHeadActualAvg)))
                     #give shortest spin angle to heading
-                    degChangeReq=gc.numGirar(degHeadingActual,degHeadingIntend) #deg
+                    degChangeReq=gc.numGirar(degHeadActualAvg,degHeadingIntend) #deg
                                 
                     #Twist the wheels
                     #check centerline speed to standard
@@ -626,7 +632,9 @@ if __name__ == '__main__':
     #probando luces y pot
     # ~ ledError.on()
     # ~ time.sleep(offShort)
-    ledBeacon.blink(on_time=onTime,off_time=offShort,n=10)
+    time.sleep(5)
+    ledBeacon=gp.LED(19)
+    #ledBeacon.blink(on_time=onTime,off_time=offShort,n=10)
     time.sleep(10)
     # ~ ctrlLuces(True)
     # ~ time.sleep(2)
