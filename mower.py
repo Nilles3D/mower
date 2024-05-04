@@ -13,7 +13,6 @@ import gnss2
 import geoCalc as gc
 import fileMan
 #standard
-from simple_pid import PID
 import time
 import datetime
 import gpiozero as gp
@@ -22,6 +21,7 @@ from subprocess import call
 import statistics
 import threading
 #semi-custom
+from simple_pid import PID
 from pyubx2 import ubxtypes_core as ubt
 
 
@@ -405,17 +405,20 @@ def recordar(prlist=[]):
     #prep file for recording
     archivoRuta=arcRuta+'rutas/'
     archivoFecha=str(datetime.date.today())
-    #check for any copy names
-    archivoNombre=fileMan.prefixMatch(archivoRuta,archivoFecha)
-    #set name
-    archivoRuta+=archivoNombre+'.txt'
+    #check and set for any copy names
+    archivoRuta=fileMan.prefixMatch(archivoRuta,archivoFecha)+'.txt'
     
     #record points to follow
     with open(archivoRuta,'w') as a:
         ddV=[0.1,0.1]
         #wait for button debounce
+        waits=0
         while btnRecordar.is_pressed==False:
             time.sleep(rato)
+            waits+=1
+            if waits>10:
+                print('mower    No pude recordar sin btnRecordar. Saliendo')
+                break
         # ~ for dd in prlist: #testing
         while btnRecordar.is_pressed==True:
             time.sleep(rato)
@@ -430,7 +433,7 @@ def recordar(prlist=[]):
     #complete
     motoPara.set() #backup
     motThread.join()
-    ledProcess.on()
+    # ~ ledProcess.on()
     
     
     return hazRec, archivoRuta
@@ -632,10 +635,9 @@ if __name__ == '__main__':
     #probando luces y pot
     # ~ ledError.on()
     # ~ time.sleep(offShort)
-    time.sleep(5)
-    ledBeacon=gp.LED(19)
-    #ledBeacon.blink(on_time=onTime,off_time=offShort,n=10)
-    time.sleep(10)
+    # ~ ledBeacon=gp.LED(19)
+    # ~ ledBeacon.blink(on_time=onTime,off_time=offShort,n=10)
+    # ~ time.sleep(10)p
     # ~ ctrlLuces(True)
     # ~ time.sleep(2)
     # ~ ctrlLuces(False)
