@@ -17,9 +17,9 @@ import time
 import datetime
 import gpiozero as gp
 import os
-from subprocess import call
 import statistics
 import threading
+import subprocess as sc
 #semi-custom
 from simple_pid import PID
 from pyubx2 import ubxtypes_core as ubt
@@ -32,6 +32,7 @@ rato=0.1 #sec, 10Hz iaRTN limit
 velStd=0.5 #m/s
 velL=0 #/480
 velR=0 #/480
+motoObj=motores.motoresObj()
 gnaObj=None
 #off time for leds
 offShort=0.5 #sec
@@ -62,11 +63,16 @@ gnssFix=threading.Event()
 # ~ ledProcess=gp.LED(20) #amarillo, recordar o autonomo
 # ~ ledGNSS=gp.LED(26) #azul
 # ~ ledMotores=gp.LED(16) #verde
-#ledBeacon=gp.LED(19)#,initial_value=None,active_high=False) #beacon's relay (blanco en pruebas)
+ledBeacon=gp.LED(19) #beacon's relay (blanco en pruebas)
+ledBeacon.off()
 btnRecordar=gp.Button(pin=27,pull_up=True)
 btnCortar=gp.Button(pin=17,pull_up=True)
 potLeft=gp.MCP3008(channel=3)
 potRight=gp.MCP3008(channel=2)
+
+#errores tempranos
+if motoObj.errores:
+    mowerPara(True)
 
 
 def ctrlLuces(rtk_Req): 
@@ -95,9 +101,9 @@ def ctrlLuces(rtk_Req):
     
     # Avisar al usario por el GNSS Fix
     horaEntrada=time.time()
-    fT=0
     ledBeacon.blink(on_time=onTime,off_time=offLong)
     #TTF3dF
+    fT=0
     while ((not gnssPara.is_set()) and (fT<3)):
         try:
             fT=gnaObj.fixType
@@ -105,8 +111,8 @@ def ctrlLuces(rtk_Req):
             pass
         time.sleep(1)
     horaTTF=time.time()
-    print(f'ctrlLuces   Rato por primera 3D fix: {horaTTF-horaEntrada}s')
-    #si necesita un fix de mas calidad
+    print(f'ctrlLuces   Rato por primera 3D fix: {round(horaTTF-horaEntrada,1)}s')
+    #si necesita un fix de mas alta calidad
     if rtk_Req:
         ledBeacon.blink(on_time=onTime,off_time=offMedium)
         while ((not gnssPara.is_set()) and fT!=4):
@@ -135,17 +141,19 @@ def ctrlLuces(rtk_Req):
     
     return
 
-def cambiaGirar(pidIN,velL,velR):
-    #given a PID calculated input based on heading delta & current velocities
-    # scales value to motor board's preferred map
-    # commands a divergence in motor radial velocity
-    #  positive required differential = positive change to left, negated to right
-    #returns commanded velocities per motor
+def cambiaGirar(percIn,velL,velR):
+    '''
+    given a unity input (percentage of maximum velocity)
+        scales value to motor board's preferred map
+        positive required differential
+         = positive percIn --> CCW spin of mower
+    echoes commanded velocities per motor
+    '''
     
-    delRueda=-480*pidIN #allows for over-commanding
-    velL+=delRueda
-    velR-=delRueda
-    motores.motCtrl(velL,velR)
+    delRueda=-motoObj.velMax*percIn
+    velL=max(-motoObj.velMax,min(motoObj.vel1act+delRueda,motoObj.velMax))
+    velR=max(-motoObj.velMax,min(motoObj.vel2act+delRueda,motoObj.velMax))
+    motoObj.vel(velL,velR)
     
     return velL,velR
 
@@ -172,6 +180,7 @@ def cambiaControl(ratoSus=0, prueba=False):
     #returns nothing
     
     #inic
+    motoObj.prueba=prueba
     print('mower    Iniciando cambiaControl con ratoSus='+str(ratoSus))
     timeCambia=time.time()
     ratoFin=False
@@ -184,10 +193,12 @@ def cambiaControl(ratoSus=0, prueba=False):
     histIndexR=0
     adcLeft=0
     adcRight=0
+    #tuned
     potLeftBase=0.594
     potLeftArriba=0.826
     potRightBase=0.607
     potRightArriba=0.887
+    #tuners
     mm=0
     mn=100
     avl=[]
@@ -203,12 +214,13 @@ def cambiaControl(ratoSus=0, prueba=False):
             mn=min(mn,tuneval)
             mm=max(mm,tuneval)
             avl.append(tuneval)
-        cmdLeft=(adcLeft-potLeftBase)/(potLeftArriba-potLeftBase)*480
-        cmdRight=(adcRight-potRightBase)/(potRightArriba-potRightBase)*480
+        cmdLeft=(adcLeft-potLeftBase)/(potLeftArriba-potLeftBase)*motoObj.velMax
+        cmdRight=(adcRight-potRightBase)/(potRightArriba-potRightBase)*motoObj.velMax
         histLeft,histIndexL,avgLeft=numRollingAvg(histLeft,histIndexL,cmdLeft)
         histRight,histIndexR,avgRight=numRollingAvg(histRight,histIndexR,cmdRight)
-        #send inputs to controller
-        velL,velR=motores.motCtrl(avgLeft,avgRight,prueba)
+        
+        #send inputs to controller (forward only)
+        velL,velR=motoObj.vel(avgLeft,-avgRight)
         if prueba:
             print('mower    adcLeft='+str(adcLeft))
             print('mower    adcRight='+str(adcRight))
@@ -229,6 +241,7 @@ def cambiaControl(ratoSus=0, prueba=False):
                 print('mower     Throttle shutdown bandera despejado en '+str(round(timeElapsed,1)))
                 shutStart=False
         ratoFin=((ratoSus>0) and (time.time()-timeCambia>ratoSus) and shutStart)
+        
         #don't overload anything
         time.sleep(rato)
         
@@ -260,10 +273,12 @@ def enviarTicks():
     #regularly send wheel ticks (WT) over serial to GNSS
     #return nothing. Intended as an independent thread
     
-    global velL, velR
+    global motoObj
     global gnaObj
     
     rato1=1/10#s, GNSS receiving limit
+    
+    #define tick constructors
     maxVel=50*(2*3.14159/1)*(1/60)*(20/36)*(0.344/2)#m/s, ~0.50m/s
     '''   = max motor RPM*(2*pi rad / rev)*(min / 60 s)
             * (gear pinion / gear rack)*(wheel dia/2)
@@ -275,9 +290,7 @@ def enviarTicks():
       ~= 1
     '''
     
-    gnaObj.cfg_WT(1,int(tickScale*pow(10,6)))
-    
-    while not motoPara.is_set():
+    def _enviar(velL,velR):
         #normal forward = positive
         wtL=abs(round(velL*tickMult,0))
         wdL=(velL>=0)
@@ -286,10 +299,40 @@ def enviarTicks():
         wdR=(velR<0)
         
         #gnss.sendWT(wtL,wtR)
-        ttag=datetime.datetime.now()
+        tsrc=datetime.datetime.now()
+        ttag=int(tsrc.microsecond/1000)
         gnaObj.put_wheelTick(wtL,wdL,wtR,wdR,ttag)
-        
-        time.sleep(rato1)
+    
+    #integrals-ish
+    subdivide=(motoObj._rato<rato1)
+    if subdivide:
+        rollLen=int(rato1/motoObj._rato)
+        rollListL=[0.0 for i in range(rollLen)]
+        rollIndexL=0
+        rollAvgL=0
+        rollListR=[0.0 for i in range(rollLen)]
+        rollIndexR=0
+        rollAvgR=0
+    
+    #give board a heads-up
+    gnaObj.cfg_WT(1,int(tickScale*pow(10,6)))
+    
+    if subdivide:
+        t0=datetime.datetime.now()
+        while not motoPara.is_set():
+            t1=datetime.datetime.now()
+            t1_t0=t1-t0
+            while t1_t0.microseconds*pow(10,6)<rato1:
+                rollListL,rollIndexL,rollAvgL=numRollingAvg(rollListL,rollIndexL,motoObj.vel1Act)
+                rollListR,rollIndexR,rollAvgR=numRollingAvg(rollListR,rollIndexR,motoObj.vel2Act)
+                time.sleep(motoObj._rato)
+                t1_t0=datetime.datetime.now()-t0
+            t0=datetime.datetime.now()
+            _enviar(int(rollAvgL),int(rollAvgR))
+    else:
+        while not motoPara.is_set():
+            _enviar(motoObj.vel1Act,motoObj.vel2Act)
+            time.sleep(rato1)
     return
 
 def mowerInic():
@@ -308,7 +351,6 @@ def mowerInic():
     ctrlLuces(False)
     '''
     #start engines
-    motores.motInic()
     motThread=threading.Thread(target=cambiaControl, args=())
     motThread.start()
     #warm up GNSS
@@ -374,7 +416,10 @@ def mowerInic():
 def mowerPara(errStop):
     
     #cut engines
-    motores.motPara()
+    if errStop:
+        motoObj.motPara()
+    else:
+        motoObj.paraSuave()
     motoPara.set()
     global velL, velR
     velL=0
@@ -383,6 +428,7 @@ def mowerPara(errStop):
     # ~ gnss.gnssParar()
     gnssPara.set()
     gnaObj.stop()
+    
     #stop lights
     # ~ ctrlLuces(False)
     ledError=gp.LED(21)
@@ -393,7 +439,12 @@ def mowerPara(errStop):
         time.sleep(30)
     else:
         ledError.on()
-        
+    #release & reinstate GPIO
+    ledBeacon.close()
+    print(sc.run(["pinctrl set 19 pd"],shell=True,text=True,check=True))
+    ledError.close()
+    print(sc.run(["pinctrl set 21 pd"],shell=True,text=True,check=True))
+    
     return
 
 def recordar(prlist=[]):
@@ -424,11 +475,12 @@ def recordar(prlist=[]):
             time.sleep(rato)
             # ~ dd=gnss.getPosition()
             dd=gnaObj.get_position()
-            #skip exact same recordings
-            if not dd==ddV:
+            #skip very close recordings
+            larga=gc.numLejo(dd,ddV)#m
+            if larga>=0.05:
                 datu=' '.join(str(ll) for ll in dd)
                 a.write(datu+'\n')
-            ddV=dd
+                ddV=dd
         
     #complete
     motoPara.set() #backup
@@ -443,13 +495,14 @@ def cortar(datPointList):
     #returns general status
     
     #Scope init
-    #goMow=mowerInic()
     goMow=True
     #ruedas
     global velL, velR
     #velL=0
     #velR=0 #neg. forward
-    pid=PID(1,0.1,0.05,setpoint=0)
+    pidDeg=PID(0.03,0.0001,0.0001,setpoint=0)
+    pidDeg.sample_time=rato
+    pidDeg.output_limits=(-1,1)
     
     #GNSS locked
     # ~ ledGNSS.blink(onTime, offLong)
@@ -459,7 +512,8 @@ def cortar(datPointList):
     headDel=180
     #get intended positions
     datPointNext=datPointList[0] #lat, long
-    while goMow and abs(headDel)>5:
+    td0=time.time()
+    while goMow and (abs(headDel)>5):
         #get current position
         # ~ gpsPointPrev=gnss.getPosition() #brujula degrados: lat, long
         gpsPointPrev=gnaObj.get_position()
@@ -469,8 +523,13 @@ def cortar(datPointList):
         gpsHead=gnaObj.heading()
         headDel=gc.numGirar(gpsHead,rumPrimera) #deg
         #rotate to heading
-        pidR=pid(headDel)
+        pidR=pidDeg(headDel)
         velL,velR=cambiaGirar(pidR,velL,velR)
+        time.sleep(pidDeg.sample_time)
+        #timeout
+        if (time.time()-td0<20):
+            print('cortar   !!!  Algo feo occurio en rumbando. Parandome')
+            goMow=False
         
     
     #Sumer velocidad
@@ -481,7 +540,7 @@ def cortar(datPointList):
         spdPerc+=0.1
         # ~ lejoStart=gc.numLejo(gnss.getPosition(),datPointNext)
         lejoStart=gc.numLejo(gnaObj.get_position(),datPointNext)
-        velL,velR=cambiaGirar(spdPerc,velL,velR)
+        velL,vel=motoObj.vel(spdPerc*velL,spdPerc*velR)
         time.sleep(0.1)
     #kick speed up if started too close to first point
     if velL<=0.25*480:
@@ -501,7 +560,7 @@ def cortar(datPointList):
     headListPoints=[gpsHead-1 for i in range(12)]
     headIndexPoints=0
     #signal and start
-    ledProcess.blink(onTime,offLong)
+    # ~ ledProcess.blink(onTime,offLong)
     for datPoint in datPointList:
         
         while goMow and not targetReached:
@@ -511,7 +570,7 @@ def cortar(datPointList):
             gpsPointCurr=gnaObj.get_position()
             gpsPointChange=gc.numLejo(gpsPointPrev,gpsPointCurr) #m
             #continue after a reasonable change is detected
-            if gpsPointChange>5/1000:
+            if gpsPointChange>0.025:
                 #reset
                 gpsPointPrev=gpsPointCurr #lat, long
                 #continue
@@ -520,13 +579,13 @@ def cortar(datPointList):
                 
                 #Continue if point is in front of mower
                 if degHeadingIntend<110:
-                
+                    timeSpdCurr=time.time() #for later
+                    
                     #GNSS headings
                     #get gnss given heading
                     # ~ degHeadingGNSS=gnss.getHeading() #brujula degrees
                     degHeadingGNSS=gnaObj.heading()
                     headListIMU, headIndexIMU, degHeadGNSSAvg = numRollingAvg(headListIMU,headIndexIMU,degHeadingGNSS)
-                    timeSpdCurr=time.time() #for later
                     #determine actual heading
                     degHeadingActual=gc.numRumbo(gpsPointPrev,gpsPointCurr) #deg
                     headListPoints,headIndexPoints,degHeadActualAvg=numRollingAvg(headListPoints,headIndexPoints,degHeadingActual)
@@ -546,17 +605,18 @@ def cortar(datPointList):
                     if velAvgAvg<velStd:
                         velL*=1.1
                         velR*=1.1
-                        velL,velR=motores.motCtrl(velL,velR)
-                    elif velAvgAvg>=1.5*velStd:
+                        velL,velR=motoObj.vel(velL,velR)
+                    elif velAvgAvg>=1.2*velStd:
                         velL*=0.9
                         velR*=0.9
-                        velL,velR=motores.motCtrl(velL,velR)
+                        velL,velR=motoObj.vel(velL,velR)
                     #input of heading differential (degree value amount needed)
-                    pidR=pid(degChangeReq)
+                    pidR=pidDeg(degChangeReq)
                     velL,velR=cambiaGirar(pidR,velL,velR)
                     
                     #reset
                     errPerd=0
+                    errMovi=0
                     targetReached=(distToNextPoint<=radiusMatch)
                 
                 else: #regard the point as a miss
@@ -565,6 +625,10 @@ def cortar(datPointList):
             
             else:
                 time.sleep(rato/10)
+                errMovi+=1
+                if errMovi>4/(rato/10):
+                    print('cortar   !!! Estoy atascado. Auxilio, porfa.')
+                    goMow=False
             #end GNSS positioning
             
             if errPerd>5:
@@ -584,23 +648,11 @@ def cortar(datPointList):
     return goMow
 
 
-def probar():
-    global velL, velR
-    while not motoPara.is_set():
-        print('probar   velL='+str(velL)+', velR='+str(velR))
-        time.sleep(0.5)
-        
-    return
-
-
 if __name__ == '__main__':
     print('__PROBANDO__ mower')
     
     print(datetime.date.today())
     #print(datetime.datetime.now())
-    # ~ pruebaThread=threading.Thread(target=probar,args=())
-    # ~ pruebaThread.start()
-    # ~ prPara=threading.Event()
     
     #probando recordar
     # ~ datPointList=([44.4,-88.8],[45.5,-89.9],[46.6,-90.0]) #lat, longs
@@ -630,42 +682,26 @@ if __name__ == '__main__':
         # ~ print(chkList)
         # ~ print(a)
         
-    # ~ print(os.path.dirname(os.path.abspath(__file__)))
-    
     #probando luces y pot
-    # ~ ledError.on()
-    # ~ time.sleep(offShort)
-    # ~ ledBeacon=gp.LED(19)
     # ~ ledBeacon.blink(on_time=onTime,off_time=offShort,n=10)
-    # ~ time.sleep(10)p
+    # ~ time.sleep(10)
     # ~ ctrlLuces(True)
     # ~ time.sleep(2)
     # ~ ctrlLuces(False)
-    # ~ todoPins=(ledError,ledProcess,ledGNSS,ledMotores)
-    # ~ for l in todoPins:
-        # ~ l.on()
-        # ~ time.sleep(1)
-        # ~ l.off()
     # ~ print(btnRecordar.is_pressed)
     # ~ print(btnCortar.is_pressed)
-    # ~ time.sleep(1)
     
     #probando threading
-    # ~ ledMotores.blink(on_time=1,off_time=.1,n=4)
-    # ~ time.sleep(1)
     # ~ ccT=threading.Thread(target=cambiaControl,args=([6]))
     # ~ ccT.start()
     # ~ lcT=threading.Thread(target=ctrlLuces,args=([True]))
     # ~ lcT.start()
-    # ~ prT=threading.Thread(target=probar,args=())
-    # ~ prT.start()
     # ~ time.sleep(6)
     # ~ ctrlLuces(False)
     # ~ time.sleep(1)
     # ~ motoPara.set()
     # ~ ccT.join()
     # ~ lcT.join()
-    # ~ prT.join()
     
     #probando enviarTicks
     # ~ enviarTicks()
@@ -674,12 +710,14 @@ if __name__ == '__main__':
     # ~ cambiaControl(10,True)
     
     #probando motores
-    # ~ print(motores.motInic())
-    # ~ for y in range(0,480,1):
-        # ~ velL, velR=motores.motCtrl(y,-y,True)
-        # ~ print(y)
-        # ~ time.sleep(0.02)
-    # ~ motores.motPara()
+    print('motos incendido')
+    motoObj.prueba=True
+    for y in range(50,360,10):
+        print(y)
+        velL, velR=motoObj.vel(y,-y)
+        time.sleep(0.02)
+    motoObj.motPara()
+    print('motos apagado')
     
     # ~ prPara.set()
     print('__prueba completa__')
@@ -698,10 +736,10 @@ else:
     sinErrores=mowerInic()
     mowerPara(not sinErrores)
     horaTotal=time.time-hora0
-    print('Horas en mower = '+str(datetime.timedelta(seconds=horaTotal)))
+    print(f'Horas en mower = {datetime.timedelta(seconds=horaTotal)}')
     print('__acabo__ mower')
     sys.stdout=stdoutOld
     mowerLog.close()
     #power down 
-    call('shutdown -P',shell=True)
+    sc.run(['shutdown -P'], shell=True, text=True, check=True)
     

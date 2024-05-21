@@ -174,16 +174,9 @@ class GNSSSkeletonApp:
                 if stream.in_waiting:
                     _, parsed_data = ubr.read()
                     if parsed_data:
-                        if isinstance(parsed_data, str):
-                            if parsed_data.find('UNKNOWN PROTOCOL')>0:
+                        if isinstance(parsed_data, str) and verbose:
+                            if parsed_data.find('UNKNOWN PROTOCOL') > 0:
                                 print(f"!!! {parsed_data}")
-                                char1 = "b'"
-                                char2 = "')"
-                                chk = parsed_data[parsed_data.find(char1) : parsed_data.find(char2)+1]
-                                print(chk)
-                                chk = chk.encode()
-                                print(chk)
-                                print(str(chk, 'utf-8'))
                         # extract current navigation solution
                         self._extract_coordinates(parsed_data, verbose)
                         # extract current GPS fix solution

@@ -34,7 +34,7 @@ def numRumbo(p0, p1):
     
     return bearing
 
-def numGirar(headCurr, headDesired):
+def numGirar(headCurr, headDesired, prueba=False):
     #given current heading and desired heading
     #returns required change in heading to reach desired heading
     
@@ -46,10 +46,11 @@ def numGirar(headCurr, headDesired):
         clockTurn=-math.copysign(1,clockTurn)*(360-abs(clockTurn))
     
     headTurn=clockTurn
-    #prueba
-    # ~ print('When heading '+str(round(headDesired,0))+' deg.')
-    # ~ print(' and needing '+str(round(headCurr,0)) +' deg.,')
-    # ~ print(' turn '+str(round(headTurn,0))+' deg.')
+
+    if prueba:
+        print('When heading '+str(round(headDesired,0))+' deg.')
+        print(' and needing '+str(round(headCurr,0)) +' deg.,')
+        print(' turn '+str(round(headTurn,0))+' deg.')
     
     return headTurn
 
@@ -78,14 +79,15 @@ if __name__ == '__main__':
     
     #prueba numGirar
     #lat=y, long=x
-    # ~ cube9=([1,0],[1,1],[0,1],[-1,1],
-        # ~ [-1,0],[-1,-1],[0,-1],[1,-1])
-    # ~ cube0=[0,0]
-    # ~ headSay=[0,45,90,135,180,225,270,315,360]
-    # ~ for toPoint in cube9:
-        # ~ for headNow in headSay:
-            # ~ headActual=numRumbo(cube0,toPoint)
-            # ~ headThen=numGirar(headActual,headNow)
+    cube9=([1,0],[1,1],[0,1],[-1,1],
+        [-1,0],[-1,-1],[0,-1],[1,-1])
+    cube0=[0,0]
+    headSay=[0,45,90,135,180,225,270,315,360]
+    for toPoint in cube9:
+        for headNow in headSay:
+            headActual=numRumbo(cube0,toPoint)
+            headThen=numGirar(headActual,headNow,True)
+    print(numGirar(340,20,True))
     
     #prueba numLejo
     # ~ print(round(numLejo([43,-95],[48,-88]),0))
