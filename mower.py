@@ -12,6 +12,7 @@ import motores
 import gnss2
 import geoCalc as gc
 import fileMan
+import btApp
 #standard
 import time
 import datetime
@@ -219,6 +220,8 @@ def cambiaControl(ratoSus=0, prueba=False):
     histIndexR=0
     adcLeft=0
     adcRight=0
+    avgLeft=1
+    avgRight=1
     #tuned
     potLeftBase=0.085
     potLeftArriba=0.353
@@ -233,21 +236,29 @@ def cambiaControl(ratoSus=0, prueba=False):
     while (not motoPara.is_set()) and (not ratoFin):
         if prueba:
             print('mower    __')
+        #get remote values
+        if btApp.btReady: #remote control
+            strLeft=min(max(-100,100+btApp.steerVal),100)/100
+            strRight=min(max(-100,100-btApp.steerVal),100)/100
+            pwrLvl=min(max(0,btApp.powerVal),100)/100
+            cmdLeft=pwrLvl*strLeft*motoObj.velMax
+            cmdRight=pwrLvl*strRight*motoObj.velMax
         #read and average pot switches
-        adcLeft=potLeft.value
-        adcRight=potRight.value
-        if prueba:
-            tuneval=[adcLeft,adcRight]
-            for v in range(0,len(tuneval)):
-                mn[v]=min(mn[v],tuneval[v])
-                mm[v]=max(mm[v],tuneval[v])
-            avl.append(tuneval[0])
-            avr.append(tuneval[1])
-        histLeft,histIndexL,avgLeft=numRollingAvg(histLeft,histIndexL,adcLeft)
-        histRight,histIndexR,avgRight=numRollingAvg(histRight,histIndexR,adcRight)
-        #map to controller values
-        cmdLeft=(avgLeft-potLeftBase)/(potLeftArriba-potLeftBase)*motoObj.velMax
-        cmdRight=(avgRight-potRightBase)/(potRightArriba-potRightBase)*motoObj.velMax
+        else: #manual sticks
+            adcLeft=potLeft.value
+            adcRight=potRight.value
+            if prueba:
+                tuneval=[adcLeft,adcRight]
+                for v in range(0,len(tuneval)):
+                    mn[v]=min(mn[v],tuneval[v])
+                    mm[v]=max(mm[v],tuneval[v])
+                avl.append(tuneval[0])
+                avr.append(tuneval[1])
+            histLeft,histIndexL,avgLeft=numRollingAvg(histLeft,histIndexL,adcLeft)
+            histRight,histIndexR,avgRight=numRollingAvg(histRight,histIndexR,adcRight)
+            #map to controller values
+            cmdLeft=(avgLeft-potLeftBase)/(potLeftArriba-potLeftBase)*motoObj.velMax
+            cmdRight=(avgRight-potRightBase)/(potRightArriba-potRightBase)*motoObj.velMax
         
         #send inputs to controller (forward only)
         velL,velR=motoObj.vel(cmdLeft,-cmdRight)
@@ -262,7 +273,7 @@ def cambiaControl(ratoSus=0, prueba=False):
         if prueba:
             print('mower    ET='+str(round(timeElapsed,2)))
             shutStart=True
-        elif ((abs(avgLeft)<1.15*potLeftBase) and (abs(avgRight)<1.20*potRightBase)):
+        elif (btApp.btReady and btApp.powerVal<=1) or (((abs(avgLeft)<1.15*potLeftBase) and (abs(avgRight)<1.20*potRightBase))):
             if (not shutStart) and (ratoSus>0):
                 print('mower     Throttle shutdown bandera sacado en '+str(round(timeElapsed,1)))
                 timeCambia=time.time()
@@ -296,6 +307,7 @@ def cambiaControl(ratoSus=0, prueba=False):
     #shutdown
     # ~ ledMotores.blink(on_time=onTime,off_time=offShort,n=4)
     manualShut.set()
+    
     
     return
 
@@ -393,6 +405,7 @@ def mowerInic():
     '''
     #start engines
     motThread.start()
+    btThread.start()
     #warm up GNSS
     # ~ gnss.gnssIniciar()
     gnaObj, sendQ = gnss2.gnssIniciar(gnssPara)
@@ -427,6 +440,7 @@ def mowerInic():
             opcion=True
             print('mowerInic    btnCortar eligido')
             motoPara.set()
+            btApp.cerrar()
             #indicate lights
             # ~ ledProcess.on()
             if ctrlLuces(False):
@@ -481,6 +495,8 @@ def mowerPara(errStop):
     else:
         motoObj.paraSuave()
     motoPara.set()
+    if btApp.btReady:
+        btApp.cerrar()
     global velL, velR
     velL=0
     velR=0
@@ -758,6 +774,7 @@ def cortar(datPointList):
 
 #late build globals
 motThread=threading.Thread(target=cambiaControl, args=([60]))
+btThread=threading.Thread(target=btApp.main,args=())
 wtThread=threading.Thread(target=enviarTicks,args=())
 
 

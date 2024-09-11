@@ -80,14 +80,18 @@ class motoresObj:
         mf1=0
         mf2=0
         #iniciar
-        kMot=[1,0.5,0.0001]#[0.33,0.66,0.0001]
+        kMot=[0.05,0,0]
+            #[0.33,0.66,0.0001] with step of 5 is very smooth
+            #[1,0.5,0.0001] with step of 20 feels just fast enough
+            #[0.05,0,0] with step 15 is smooth for digital commands
+        maxCambia=15 # cambia de velocidad permisible en rato
+            
         pidMot1=PID(kMot[0],kMot[1],kMot[2],setpoint=0)
         pidMot2=PID(kMot[0],kMot[1],kMot[2],setpoint=0)
         pids=[pidMot1,pidMot2]
         for p in pids:
             p.output_limits=[-1,1] #unidad
             p.sample_time=self._rato
-        maxCambia=20 # cambia de velocidad permisible en rato
         
         #actualizar
         while not self._monitorPara.is_set():
