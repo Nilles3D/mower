@@ -96,7 +96,6 @@ class GNSSSkeletonApp:
         self.sep = 0
         self.heading = 0 #headMot?
         self.fixType = 0
-        self.hAcc = 0
         
         print("gnss2    GNSS Skeleton initialized")
 
@@ -118,7 +117,7 @@ class GNSSSkeletonApp:
         self.stop()
         print("gnss2    GNSSSkeletonApp exited")
 
-    def run(self, verbose=False):
+    def run(self):
         """
         Run GNSS reader/writer.
         """
@@ -134,7 +133,6 @@ class GNSSSkeletonApp:
                 self.stream,
                 self.stopevent,
                 self.sendqueue,
-                verbose,
             ),
             daemon=True,
         )
@@ -161,9 +159,8 @@ class GNSSSkeletonApp:
         :param Queue sendqueue: queue for messages to send to receiver
         """
         print("gnss2    GNSS read_loop start")
-        print(f"gnss2   verbose = {verbose}")
         
-        gdata0=[]
+        gdata0=None
         pdata0=None
 
         ubr = UBXReader(
@@ -172,11 +169,9 @@ class GNSSSkeletonApp:
         while not stopevent.is_set():
             try:
                 if stream.in_waiting:
+                    # ~ print(stream.readline())
                     _, parsed_data = ubr.read()
                     if parsed_data:
-                        if isinstance(parsed_data, str) and verbose:
-                            if parsed_data.find('UNKNOWN PROTOCOL') > 0:
-                                print(f"!!! {parsed_data}")
                         # extract current navigation solution
                         self._extract_coordinates(parsed_data, verbose)
                         # extract current GPS fix solution
@@ -185,38 +180,29 @@ class GNSSSkeletonApp:
                         if verbose:
                             # if it's an RXM-RTCM message, show which RTCM3 message
                             # it's acknowledging and whether it's been used or not.""
-                            if hasattr(parsed_data, "identity"):
-                                if parsed_data.identity == "RXM-RTCM":
-                                    nty = (
-                                        f" - {parsed_data.msgType} "
-                                        f"{'Used' if parsed_data.msgUsed > 0 else 'Not used'}"
-                                    )
-                                else:
-                                    nty = ""
-                            
-                            if hasattr(parsed_data, "header"):
-                                uky = ", header = "+str(decode(parsed_data.header))
+                            if parsed_data.identity == "RXM-RTCM":
+                                nty = (
+                                    f" - {parsed_data.msgType} "
+                                    f"{'Used' if parsed_data.msgUsed > 0 else 'Not used'}"
+                                )
                             else:
-                                uky = ""
-                                
+                                nty = ""
+
                             if self.idonly:
                                 print(f"gnss2   GNSS>> {parsed_data.identity}{nty}")
                             else:
-                                print(f"gnss2   GNSS+> {parsed_data}{uky}")
-                                # ~ sleep(4)
+                                print(f"gnss2   GNSS+> {parsed_data}")
                             
                             #packet visualization
-                            gdata1=[self.lat, self.lon, self.alt, self.heading, self.fixType]
-                            # ~ print('gdata')
-                            # ~ print(gdata1)
+                            gdata=[self.lat, self.lon, self.alt, self.heading, self.fixType]
                             if gdata1!=gdata0:
                                 print("gnss2    lat, lon, alt, heading, fix")
                                 print(f"gnss2   {gdata1}")
                                 gdata0=gdata1
-                            # ~ pdata1=parsed_data
-                            # ~ if pdata1!=pdata0:
-                                # ~ print(f"gnss2   parsed: {pdata1}")
-                                # ~ pdata0=pdata1
+                            pdata1=parsed_data
+                            if pdata1!=pdata0:
+                                print(f"gnss2   parsed: {pdata1}")
+                                pdata0=pdata1
 
                 # send any queued output data to receiver
                 self._send_data(ubr.datastream, sendqueue, verbose)
@@ -255,11 +241,9 @@ class GNSSSkeletonApp:
         if self.showhacc and hasattr(parsed_data, "hAcc"):  # UBX hAcc is in mm
             unit = 1 if parsed_data.identity == "PUBX00" else 1000
             if verbose:
-                if self.hAcc!=parsed_data.hAcc:
-                    print(f"gnss2   Estimated horizontal accuracy: {(parsed_data.hAcc / unit):.3f} m")
-                    self.hAcc=parsed_data.hAcc
-        if hasattr(parsed_data, "headMot"): #direction of motion, headVeh = point direction
-            self.heading = parsed_data.headMot 
+                print(f"gnss2   Estimated horizontal accuracy: {(parsed_data.hAcc / unit):.3f} m")
+        if hasattr(parsed_data, "heading"):
+            self.heading = parsed_data.heading
 
     def _extract_fixType(self, parsed_data: object, verbose=False):
         """
@@ -295,9 +279,6 @@ class GNSSSkeletonApp:
                     sendqueue.task_done()
             except Empty:
                 pass
-            except TypeError:
-                print("!!!gnss2    Could not unpack non-iterable")
-                print(data)
 
     def enable_ubx(self, enable: bool):
         """
@@ -350,12 +331,15 @@ class GNSSSkeletonApp:
 
         # create event of specified eventtype
     
-    def _put_message(self, msg):
+    def put_message(self, ubxClass: str, ubxID: str, msgMode=ubt.POLL, payload=None):
         '''
-        Put a command on the send_queue
-        :msg UBX message
+        Parse and put a command on the send_queue
+        :msgMode int
+        :payload bytes
+        Default to Poll msgMode
         '''
-        self.sendqueue.put((msg.serialize(),msg))
+        msg=UBXMessage(ubxClass, ubxID, msgMode, payload)
+        self.sendqueue.put(msg)
         
     def cfg_WT(self, in_autoDirPinPolOff: int, in_wtFactor: int):
         """
@@ -366,9 +350,7 @@ class GNSSSkeletonApp:
             autoDirPinPolOff=in_autoDirPinPolOff, #1=Off
             wtFactor=in_wtFactor #um
         )
-        # ~ print("gnss2    Configuring WT")
-        # ~ print(msg)
-        self._put_message(msg)
+        self.sendqueue.put(msg)
         print("gnss2    WT configured")
         
         return
@@ -387,7 +369,7 @@ class GNSSSkeletonApp:
         tR=ticksRight.to_bytes(23,"big")
         xR=bytes(bytearray(tR+dR))
         #bytearray vs bitarray nomenclature is unclear
-        msg=UBXMessage(msgClass,msgID,ubt.GET,
+        msg=UBXMessage(msgCLass,msgID,ubt.POLL,
             numMeas=2,
             dataField_01=xL, #X024
             dataType_01=8, #U06
@@ -395,12 +377,12 @@ class GNSSSkeletonApp:
             dataType_02=9,
             timeTag=timestamp
         )
-        self._put_message(msg)
+        self.sendqueue.put(msg)
         
         return
         
 
-def gnssIniciar(eventPara: Event, port='/dev/serial0', baud=115200, outTime=3, verbose=False):
+def gnssIniciar(eventPara: Event, port='/dev/serial0', baud=38400, outTime=3, verbose=False):
     print("gnss2    Iniciando GNSS")
     
     #iniciar sustantivo
@@ -421,6 +403,7 @@ def gnssIniciar(eventPara: Event, port='/dev/serial0', baud=115200, outTime=3, v
     send_queue = Queue()
     stop_event = eventPara #Event()
     
+    # ~ with GNSSSkeletonApp(
     gna = GNSSSkeletonApp(
         args.port,
         int(args.baudrate),
@@ -430,8 +413,11 @@ def gnssIniciar(eventPara: Event, port='/dev/serial0', baud=115200, outTime=3, v
         idonly=False,
         enableubx=True,
         showhacc=True,
+        verbose=verbose,
+    # ~ ) as gna:
+        # ~ gna.run()
     )
-    gna.run(verbose=verbose)
+    gna.run()
     
     print("gnss2    Incindido GNSS")
     return gna, send_queue
@@ -439,66 +425,52 @@ def gnssIniciar(eventPara: Event, port='/dev/serial0', baud=115200, outTime=3, v
 
 
 if __name__ == "__main__":
-    if True:
-        print('de casa')
-        arp = ArgumentParser(
-            formatter_class=ArgumentDefaultsHelpFormatter,
-        )
-        arp.add_argument(
-            "-P", "--port", required=False, help="Serial port", default="/dev/serial0" #ttyACM1
-        )
-        arp.add_argument(
-            "-B", "--baudrate", required=False, help="Baud rate", default=38400, type=int
-        )
-        arp.add_argument(
-            "-T", "--timeout", required=False, help="Timeout in secs", default=3, type=float
-        )
+    print('de casa')
+    arp = ArgumentParser(
+        formatter_class=ArgumentDefaultsHelpFormatter,
+    )
+    arp.add_argument(
+        "-P", "--port", required=False, help="Serial port", default="/dev/serial0" #ttyACM1
+    )
+    arp.add_argument(
+        "-B", "--baudrate", required=False, help="Baud rate", default=38400, type=int
+    )
+    arp.add_argument(
+        "-T", "--timeout", required=False, help="Timeout in secs", default=3, type=float
+    )
 
-        args = arp.parse_args()
-        send_queue = Queue()
-        stop_event = Event()
+    args = arp.parse_args()
+    send_queue = Queue()
+    stop_event = Event()
 
-        try:
-            print("Starting GNSS reader/writer...\n")
-            with GNSSSkeletonApp(
-                args.port,
-                int(args.baudrate),
-                float(args.timeout),
-                stop_event,
-                sendqueue=send_queue,
-                idonly=False,
-                enableubx=True,
-                showhacc=True,
-            ) as gna:
-                gna.run(verbose=True)
-                while True:
-                    sleep(1)
-                stop_event.set()
-                print(gna.baudrate)
-                
-        except KeyboardInterrupt:
+    try:
+        print("Starting GNSS reader/writer...\n")
+        with GNSSSkeletonApp(
+            args.port,
+            int(args.baudrate),
+            float(args.timeout),
+            stop_event,
+            sendqueue=send_queue,
+            idonly=False,
+            enableubx=True,
+            showhacc=True,
+            verbose=True,
+        ) as gna:
+            gna.run()
+            #while True:
+            sleep(20)
             stop_event.set()
-            print("Terminated by user")
-    else:
-        try:
-            print('\nby def')
-            gnssPara=Event()
-            gnaObj, sendQ=gnssIniciar(gnssPara,verbose=True)
-            sleep(0.2)
-            tickScale=105 #um
-            # ~ gnaObj.cfg_WT(1,tickScale)
-            sleep(0.2)
-            import datetime
-            misaDataTima=datetime.datetime.now()
-            print(misaDataTima)
-            mdt=int(misaDataTima.microsecond/1000)
-            print(mdt)
-            # ~ gnaObj.put_wheelTick(1,True,1,False,mdt)
-            sleep(60)
-            gnssPara.set()
-            gnaObj.stop()
-            print(gnaObj.baudrate)
-        except KeyboardInterrupt:
-            stop_event.set()
-            print("Finishing")
+            print(gna.baudrate)
+            
+    except KeyboardInterrupt:
+        stop_event.set()
+        print("Terminated by user")
+    
+    print('\nby def')
+    gnssPara=Event()
+    gnaObj, sendQ=gnssIniciar(gnssPara,verbose=True)
+    sleep(10)
+    gnssPara.set()
+    gnaObj.stop()
+    print(gnaObj.baudrate)
     
