@@ -29,6 +29,13 @@ btReady=False
 server_sock=bt.BluetoothSocket(bt.RFCOMM)
 port=22
 server_sock.bind(("",port))
+print("btApp    Buscando conexion...")
+server_sock.listen(1)
+client_sock,address=server_sock.accept()
+print("btApp    Conexion realizada con: ",address)
+btReady=True
+
+from time import sleep
 
 #percent controls
 #keys
@@ -41,14 +48,16 @@ powerVal=0
 steerVal=0
 biasVal=0
 
-def iniciar():
+def empezar():
     global client_sock
     global btReady
     
-    server_sock.listen(1)
+    print("btApp    Buscando otro conexion")
     client_sock,address=server_sock.accept()
     print("btApp    Conexion realizada con: ",address)
+    
     btReady=True
+    
     return
 
 def cerrar():
@@ -58,56 +67,71 @@ def cerrar():
     server_sock.close()
     print("btApp    cerrado")
     return
-    
-def main():
-    print("btApp    Esperando por un conexion Bluetooth")
-    iniciar()
-    global powerVal
-    global steerVal
+
+def recibir():
+    print("btApp    recibiendo...")    
+    global btReady
     global biasVal
+    
+    nuevo=False #retry the connection
+    
     try:
-        print(f"btApp    Empezando con power={powerVal}, steer={steerVal}, y bias={biasVal}")
         while len(client_sock.getpeername())>0:
-            # ~ print("wait")
+            print("wait")
             recvdata=client_sock.recv(256)
             #on receipt
             recCode=recvdata.decode()
-            # ~ print(recCode)
+            print(recCode)
             if len(recCode)>1:
-                #code
                 recVar=int(recCode[:1])
-                #value sanitization
-                recVal=recCode[1:]
-                lastDash=recVal.rfind("-")
-                #value conversion
-                recNum=int(recVal[max(0,lastDash):])
+                recNum=int(recCode[1:])
             else:
                 recVar=0
                 recNum=0
             #use
             print(recVar, recNum)
-            if (type(recNum) is int):
-                if ((-200<=recNum) and (recNum<=200)):
-                    if recVar==powerCode:
-                        powerVal=recNum
-                    elif recVar==biasCode:
-                        biasVal=recNum
-                    elif recVar==steerCode:
-                        steerVal=recNum+biasVal
-                    else:
-                        print(f"btApp    {recVar}, {recNum}")
+            if recVar==powerCode:
+                powerVal=recNum
+            elif recVar==biasCode:
+                biasVal=recNum
+            elif recVar==steerCode:
+                steerVal=recNum+biasVal
+            else:
+                print("btApp    %i,%i",recVar,recNum)
             #exit attempt
             if recVar==closeCode:
                 cerrar()
-                return 0
+                return False
     except Exception as err:
-        print("btApp    ",err)
+        errPhrase=str(err)
+        print(errPhrase)
+        dropout="[Errno 104]"
+        nuevo = (errPhrase[:len(dropout)]==dropout)
     except KeyboardInterrupt:
         print("btApp    saliendo")
     finally:
-        cerrar()
-    return 0
+        if not nuevo:
+            cerrar()
+    
+    btReady=False
+    
+    return nuevo
+
+def main():
+    print("btApp    main begin")
+    
+    intentar=True
+    while intentar:
+        #start data transfer
+        intentar=recibir()
+        #reconnect after missed connection
+        if intentar:
+            empezar()
+    
+    return
 
 
 if __name__ == '__main__':
+    print("btApp    start")
     main()
+    # ~ print(recibir())
