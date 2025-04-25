@@ -15,16 +15,17 @@ def main(ser):
         lin=ser.readline()
         if lin!="":
             #attempt tp decode
-            enc=chardet.detect(lin)['encoding']
-            try:
+            # ~ enc=chardet.detect(lin)['encoding']
+            # ~ try:
                 # ~ if enc!=None:
                     # ~ linS=lin.decode(enc)
                 # ~ else:
-                #forget about that gibberish
-                linS=lin.decode()
-                return linS[:-1]
-            except:
-                pass
+                # ~ #forget about that gibberish
+                    # ~ linS=lin.decode()
+                # ~ return linS[:-1]
+            # ~ except:
+                # ~ pass
+            return lin
     return ''
 
 if __name__ == '__main__':
@@ -42,13 +43,20 @@ if __name__ == '__main__':
     
     while cont:
         try:
-            red=main(ser)
-    
+            red=''
+            if ser.in_waiting>0:
+                red=main(ser)
+            
+            t1=time.time()-t0
+            
             if red!='':
-                t1=time.time()-t0
-                print(round(t1,1), red)
-                cont=(t1<=30)
-    
-        except KeyboardInterrupt:
+                print(round(t1,1), red[:100])
+            
+            cont=(t1<=30)
+            
+            ser.flush()
+                
+        except (KeyboardInterrupt) as e:
             cont=False
+            ser.close()
             print('end')
