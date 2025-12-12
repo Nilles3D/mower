@@ -32,7 +32,7 @@ CONNECTED = 1
 class GNSSBarebones:
     
     def __init__(
-        self, port: str, baudrate: int, timeout: float, stopevent: Event, **kwargs
+        self, port: str, baudrate: int, timeout: float, stopevent: Event, verbose: bool, **kwargs
     ):
         """
         Constructor.
@@ -54,6 +54,7 @@ class GNSSBarebones:
         self.sep = 0
         self.heading = 0 #headMot?
         self.fixType = 0
+        self.verbose = verbose
         
         print("gnss3    GNSSBarebones initialized")
 
@@ -142,13 +143,13 @@ class GNSSBarebones:
                             else:
                                 nty = ""
 
-                            if self.idonly:
-                                print(f"gnss3   GNSS>> {parsed_data.identity}{nty}")
-                            else:
-                                print(f"gnss3   GNSS+> {parsed_data}")
+                            # if self.idonly:
+                                # print(f"gnss3   GNSS>> {parsed_data.identity}{nty}")
+                            # else:
+                                # print(f"gnss3   GNSS+> {parsed_data}")
                             
                             #packet visualization
-                            gdata=[self.lat, self.lon, self.alt, self.heading, self.fixType]
+                            gdata1=[self.lat, self.lon, self.alt, self.heading, self.fixType]
                             if gdata1!=gdata0:
                                 print("gnss3    lat, lon, alt, heading, fix")
                                 print(f"gnss3   {gdata1}")
@@ -229,7 +230,7 @@ def gnssIniciar(eventPara: Event, port='/dev/serial0', baud=38400, outTime=3, ve
     stop_event = eventPara #Event()
     
     #enviar por correr
-    gna = GNSSSkeletonApp(
+    gna = GNSSBarebones(
         args.port,
         int(args.baudrate),
         float(args.timeout),
