@@ -135,18 +135,18 @@ class GNSSBarebones:
                         if verbose:
                             # if it's an RXM-RTCM message, show which RTCM3 message
                             # it's acknowledging and whether it's been used or not.""
-                            if parsed_data.identity == "RXM-RTCM":
-                                nty = (
-                                    f" - {parsed_data.msgType} "
-                                    f"{'Used' if parsed_data.msgUsed > 0 else 'Not used'}"
-                                )
-                            else:
-                                nty = ""
+                            # ~ if parsed_data.identity == "RXM-RTCM":
+                                # ~ nty = (
+                                    # ~ f" - {parsed_data.msgType} "
+                                    # ~ f"{'Used' if parsed_data.msgUsed > 0 else 'Not used'}"
+                                # ~ )
+                            # ~ else:
+                                # ~ nty = ""
 
-                            # if self.idonly:
-                                # print(f"gnss3   GNSS>> {parsed_data.identity}{nty}")
-                            # else:
-                                # print(f"gnss3   GNSS+> {parsed_data}")
+                            # ~ if self.idonly:
+                                # ~ print(f"gnss3   GNSS>> {parsed_data.identity}{nty}")
+                            # ~ else:
+                                # ~ print(f"gnss3   GNSS+> {parsed_data}")
                             
                             #packet visualization
                             gdata1=[self.lat, self.lon, self.alt, self.heading, self.fixType]
@@ -154,10 +154,10 @@ class GNSSBarebones:
                                 print("gnss3    lat, lon, alt, heading, fix")
                                 print(f"gnss3   {gdata1}")
                                 gdata0=gdata1
-                            pdata1=parsed_data
-                            if pdata1!=pdata0:
-                                print(f"gnss3   parsed: {pdata1}")
-                                pdata0=pdata1
+                            # ~ pdata1=parsed_data
+                            # ~ if pdata1!=pdata0:
+                                # ~ print(f"gnss3   parsed: {pdata1}")
+                                # ~ pdata0=pdata1
 
             except (
                 UBXMessageError,

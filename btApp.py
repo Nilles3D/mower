@@ -22,20 +22,19 @@
 #  
 #  
 
+#credit
+#https://community.appinventor.edu/t/raspberry-pi-bluetooth-send-receive/59846/4
+#https://scribles.net/setting-up-blueooth-serial-port-profile-on-raspberry-pi/
+
 import bluetooth as bt
 
 #bt setup
+btGo=True
 btReady=False
 server_sock=bt.BluetoothSocket(bt.RFCOMM)
 port=22
 server_sock.bind(("",port))
-print("btApp    Buscando conexion...")
-server_sock.listen(1)
-client_sock,address=server_sock.accept()
-print("btApp    Conexion realizada con: ",address)
-btReady=True
-
-from time import sleep
+haConectado=False
 
 #percent controls
 #keys
@@ -48,90 +47,112 @@ powerVal=0
 steerVal=0
 biasVal=0
 
-def empezar():
+def iniciar():
     global client_sock
     global btReady
+    global haConectado
     
-    print("btApp    Buscando otro conexion")
+    if not haConectado:
+        server_sock.listen(1)
+    else:
+        print("BtApp    Buscando otra conexion...")
     client_sock,address=server_sock.accept()
     print("btApp    Conexion realizada con: ",address)
     
     btReady=True
+    haConectado=True
     
     return
 
 def cerrar():
+    global btReady
+    global btGo
     print("btApp    cerrando...")
     btReady=False
+    btGo=False
     client_sock.close()
     server_sock.close()
     print("btApp    cerrado")
     return
-
-def recibir():
-    print("btApp    recibiendo...")    
-    global btReady
-    global biasVal
     
-    nuevo=False #retry the connection
+def recibir(prueba=False):
+    global powerVal
+    global steerVal
+    global biasVal
+    global btGo
+    global btReady
+    
+    nuevo = False #retry the connection
     
     try:
-        while len(client_sock.getpeername())>0:
-            print("wait")
+        print(f"btApp    Empezando con power={powerVal}, steer={steerVal}, y bias={biasVal}")
+        while len(client_sock.getpeername())>0 and btGo:
+            # ~ print("wait")
             recvdata=client_sock.recv(256)
             #on receipt
             recCode=recvdata.decode()
-            print(recCode)
+            # ~ print(recCode)
             if len(recCode)>1:
+                #code
                 recVar=int(recCode[:1])
-                recNum=int(recCode[1:])
+                #value sanitization
+                recVal=recCode[1:]
+                lastDash=recVal.rfind("-")
+                #value conversion
+                recNum=int(recVal[max(0,lastDash):])
             else:
                 recVar=0
                 recNum=0
             #use
-            print(recVar, recNum)
-            if recVar==powerCode:
-                powerVal=recNum
-            elif recVar==biasCode:
-                biasVal=recNum
-            elif recVar==steerCode:
-                steerVal=recNum+biasVal
-            else:
-                print("btApp    %i,%i",recVar,recNum)
+            if prueba:
+                print(recVar, recNum)
+            if (type(recNum) is int):
+                if ((-200<=recNum) and (recNum<=200)):
+                    if recVar==powerCode:
+                        powerVal=recNum
+                    elif recVar==biasCode:
+                        biasVal=recNum
+                    elif recVar==steerCode:
+                        steerVal=recNum+biasVal
+                    else:
+                        print(f"btApp    {recVar}, {recNum}")
             #exit attempt
             if recVar==closeCode:
                 cerrar()
                 return False
     except Exception as err:
         errPhrase=str(err)
-        print(errPhrase)
+        print("btApp    ",errPhrase)
         dropout="[Errno 104]"
         nuevo = (errPhrase[:len(dropout)]==dropout)
     except KeyboardInterrupt:
         print("btApp    saliendo")
     finally:
+        btReady = False
         if not nuevo:
             cerrar()
     
-    btReady=False
-    
     return nuevo
 
-def main():
-    print("btApp    main begin")
+
+def main(prueba=False):
+    print("btApp    main inicio")
+    global btGo
+    
+    #first connection
+    iniciar()
     
     intentar=True
-    while intentar:
-        #start data transfer
-        intentar=recibir()
-        #reconnect after missed connection
+    while intentar and btGo:
+        intentar=recibir(prueba)
         if intentar:
-            empezar()
+            #conexion segunda
+            iniciar()
     
     return
 
-
 if __name__ == '__main__':
-    print("btApp    start")
-    main()
-    # ~ print(recibir())
+    from time import sleep
+    main(True)
+    sleep(5)
+    cerrar()

@@ -110,6 +110,7 @@ def ctrlLuces(rtk_Req):
     #TTF3dF
     fT=0
     fT0=0
+    global gnaObj
     gps0=gnaObj.get_position()
     print('ctrlLuces    Esperando por un 3D Fix')
     while ((not gnssPara.is_set()) and (fT<0)): #should be ft<3
@@ -135,7 +136,7 @@ def ctrlLuces(rtk_Req):
     if rtk_Req and sinErr:
         ledBeacon.blink(on_time=onTime,off_time=offMedium)
         print('ctrlLuces    Esperando por un 3D Fix de alta calidad')
-        while ((not gnssPara.is_set()) and fT!=4):
+        while ((not gnssPara.is_set()) and fT>=3): #should be fT!=4
             try:
                 fT=gnaObj.fixType
                 gps2=gnaObj.get_position()
@@ -205,7 +206,7 @@ def numRollingAvg(myList,myIndex,myValue):
 
 def cambiaControl(ratoSus=0, prueba=False):
     #given timeout for when all controls are at zero state
-    # passes rheostat inputs to motor control. FORWARD ONLY
+    # passes rheostat (FORWARD ONLY) or Bluetooth inputs to motor control.
     # intended as an independent thread
     #returns nothing
     
@@ -312,6 +313,7 @@ def cambiaControl(ratoSus=0, prueba=False):
         dt+=' motoPara'
     if ratoFin:
         dt+=' ratoFin'
+        motoObj.paraSuave()
     print(f'mower    Saliendo cambiaControl por{dt}')
     
     if prueba:
@@ -415,7 +417,7 @@ def logSave(fileObj, stopEvent):
         timeDelt=time.time()-hora01
     return
     
-def mowerInic():
+def mowerInic(prueba=False):
     #startup sequence for any mowing op
     #returns general status
     
@@ -439,14 +441,14 @@ def mowerInic():
     motThread.start()
     btThread.start()
     #warm up GNSS
-    gnaObj = gnss.gnssIniciar(gnssPara)
+    gnaObj = gnss.gnssIniciar(gnssPara)#,verbose=prueba)
     # ~ wtThread.start()
     
     #Choose the Mode
     #follow toggle orders
     horaVia=time.time()
     horaEn=0
-    horaLim=240
+    horaLim=240#s
     archivoGuia=arcRuta+'rutaSeguida.txt'
     opcion=False
     
@@ -461,7 +463,7 @@ def mowerInic():
             # ~ ledProcess.blink(onTime, offShort)
             if ctrlLuces(True):
                 #record location of guide
-                sinErrores, archivoNuevo=recordar()
+                sinErrores, archivoNuevo=recordar(verbose=prueba)
                 recArchivo=open(archivoGuia,'w')
                 recArchivo.write(archivoNuevo)
                 recArchivo.close()
@@ -492,6 +494,7 @@ def mowerInic():
                 print(f'mowerInic   siguiendo {len(datPointList)} puntos en linea')
                 sinErrores=cortar(datPointList)
             else:
+                print('mowerInic    !!! No pude continuar con cortar sin GPS')
                 sinErrores=False
         
         else: #wait for human to start
@@ -527,7 +530,7 @@ def mowerPara(errStop):
     else:
         motoObj.paraSuave()
     print('mowerPara    Motores han sido apagados')
-    if motoObj.mf1>=100 or motoObj.mf2>=100:
+    if motoObj.errores:
         errStop=True
     motoPara.set()
     print('mowerPara    Controles manuales apagando')
@@ -568,7 +571,7 @@ def mowerPara(errStop):
     
     return
 
-def recordar(prlist=[]):
+def recordar(prlist=[],verbose=False):
     #record set of coordinates as a list to a local file
     #returns general status and full path of file made
     
@@ -594,6 +597,7 @@ def recordar(prlist=[]):
                 print('recordar    No pude recordar sin btnRecordar. Saliendo')
                 break
         # ~ for dd in prlist: #testing
+        points=0
         while btnRecordar.is_pressed==True:
             time.sleep(rato)
             #dd=gnss.getPosition()
@@ -601,9 +605,17 @@ def recordar(prlist=[]):
             #skip very close recordings
             larga=gc.numLejo(dd,ddV)#m
             if larga>=0.05:
+                if verbose:
+                    print(f'recordar    Punto {dd} encontre')
                 datu=' '.join(str(ll) for ll in dd)
                 a.write(datu+'\n')
                 ddV=dd
+                points+=1
+            elif verbose:
+                print(f'recordar    Punto {dd} no es suficientamente lejo del previo')
+            if points>=24: #periodically save
+                a.flush()
+                points=0
     
     print('recordar recordar completo')
     
@@ -810,9 +822,10 @@ def cortar(datPointList):
 
 
 #late build globals
-motThread=threading.Thread(target=cambiaControl, args=([60]))
-btThread=threading.Thread(target=btApp.main,args=())
-wtThread=threading.Thread(target=enviarTicks,args=())
+motThread=threading.Thread(name='motThread',target=cambiaControl, args=([60]))
+btThread=threading.Thread(name='btThread',target=btApp.main,args=())
+btThread.daemon=True
+# ~ wtThread=threading.Thread(name='wtThread',target=enviarTicks,args=())
 
 
 if __name__ == '__main__':
@@ -940,11 +953,14 @@ if __name__ == '__main__':
         # ~ print(sc.run(["pinctrl set 19 pd"],shell=True,text=True,check=True))
         '''
         #probando cortar
-        print(mowerInic())
+        print(mowerInic(True))
     
     finally:
-        motoObj.paraSuave()
+        mowerPara(False)
         print('__prueba completa__')
+        for t in threading.enumerate():
+            print(f'Active thread: {t.name}')
+        sys.exit()
 else:
     fecha=datetime.datetime.now()
     motoObj=motores.motoresObj()
@@ -956,7 +972,7 @@ else:
     logFile=fechaLog+'.txt'
     mowerLog=open(logFile,'w')
     sys.stdout=mowerLog
-    logThread=threading.Thread(target=logSave,args=([mowerLog, motoPara]))
+    logThread=threading.Thread(name='logThread',target=logSave,args=([mowerLog, motoPara]))
     logThread.start()
     
     print('__AUTONOMY__ mower')

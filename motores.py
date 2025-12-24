@@ -29,6 +29,7 @@ class motoresObj:
         self.vel1act=0 #actual
         self.vel2=0
         self.vel2act=0
+        self.maxCambia=15 # cambia de velocidad permisible en rato
         self.velMax=motors.MAX_SPEED
         
         #controls
@@ -70,17 +71,19 @@ class motoresObj:
             self._monT.start()
         return
     
-    def _velPon(self,vel_1,vel_2):
-        self.vel1act=max(-self.velMax,min(int(vel_1),self.velMax))
-        self.vel2act=max(-self.velMax,min(int(vel_2),self.velMax))
-        motors.setSpeeds(geared*self.vel2act,geared*self.vel1act) #connected backwards IRL
+    def _timer(self):
+        t0=time()
+        while not self._monitorPara.is_set():
+            sleep(0.25)
+            print(f'motores time = {time()-t0:.2f}')
         return
     
     def _velMonitor(self):
         print('motores  Monitor empezando')
         mf1=0
         mf2=0
-        maxCambia=15 # cambia de velocidad permisible en rato
+        monVinPrev=[0,0]
+        monVoutPrev=[0,0]
         '''
         kMot=[0.05,0,0]
             #[0.33,0.66,0.0001] with step of 5 is very smooth
@@ -108,9 +111,27 @@ class motoresObj:
             cmd2=self.vel2act+pid2
             self._velPon(cmd1,cmd2)
             '''
-            velDel1=max(-maxCambia,min(self.vel1-self.vel1act,maxCambia))
-            velDel2=max(-maxCambia,min(self.vel2-self.vel2act,maxCambia))
-            self._velPon(self.vel1act+velDel1,self.vel2+velDel2) #straight to desired value
+            #validate step change
+            velDel1=max(-self.maxCambia,min(self.vel1-self.vel1act,self.maxCambia))
+            velDel2=max(-self.maxCambia,min(self.vel2-self.vel2act,self.maxCambia))
+            
+            #place change into memory
+            vel_1=self.vel1act+velDel1
+            vel_2=self.vel2act+velDel2
+            self.vel1act=max(-self.velMax,min(int(vel_1),self.velMax))
+            self.vel2act=max(-self.velMax,min(int(vel_2),self.velMax))
+
+            #enact change
+            motors.motor1.setSpeed(geared*self.vel2act)
+            motors.motor2.setSpeed(geared*self.vel1act) #connected backwards IRL
+            
+            #monitor
+            if self.prueba:
+                if ([self.vel1,self.vel2]!=monVinPrev) or ([self.vel1act,self.vel2act]!=monVoutPrev):
+                    print(f'motores  dado {self.vel1}, {self.vel2} | usar {self.vel1act}, {self.vel2act}')
+                    monVinPrev=[self.vel1,self.vel2]
+                    monVoutPrev=[self.vel1act,self.vel2act]
+            
             #esperar
             sleep(self._rato)
             
@@ -129,34 +150,25 @@ class motoresObj:
                 motors.enable()
             if mf1>=100 or mf2>=100:
                 print('motores  Excesso de errores. Parandome.')
+                self.errores=True
                 self.motPara()
-            
         
         print('motores  Monitor en fin')
-        return
-    
-    def _timer(self):
-        t0=time()
-        while not self._monitorPara.is_set():
-            sleep(0.25)
-            print(f'motores time = {time()-t0:.2f}')
+        
+        if self.prueba:
+            print(f'=== errores total en motor1 y 2 = {mf1} | {mf2}')
+        
         return
     
     def vel(self,vel_1,vel_2):
-        self.vel1=vel_1
-        self.vel2=vel_2
-        
-        if self.prueba:
-            print(f'motores  dado {self.vel1}, {self.vel2}')
-            sleep(10*self._rato)
-            print(f'motores  usar {self.vel1act}, {self.vel2act}')
-        
+        self.vel1=int(vel_1)
+        self.vel2=int(vel_2)
         return vel_1, vel_2
     
     def paraSuave(self):
         print('motores  Parando suavemente')
         self.vel(0,0)
-        sleep(1.1)
+        sleep(self._rato*(1+self.velMax/self.maxCambia))
         self._monitorPara.set()
         if self._monT.is_alive():
             self._monT.join()
@@ -204,11 +216,10 @@ if __name__ == '__main__':
         
         #multi-step triangle wave
         ruedas.vel(0,0)
-        sleep(1.5)
         yTr=[0]
         x2=[0]
         y2=[0]
-        velRampa=list(range(0,480,5))#+list(range(480,0,-5))#+list(range(-480,0,5))+[0]
+        velRampa=list(range(0,500,5))#+list(range(480,0,-5))#+list(range(-480,0,5))+[0]
         t2=time()
         for v in velRampa:
             ruedas.vel(0,v)
@@ -219,10 +230,9 @@ if __name__ == '__main__':
         ax.plot(x2,yTr,linewidth=1.0)
         ax.plot(x2,y2,linewidth=2.0)
             
-        print(f'faults antes de paraSuave(): {motors.getFaults()}')
+        print(f'=== faults antes de paraSuave(): {motors.getFaults()}')
         ruedas.paraSuave()
-        print(f'despues de paraSuave(): {motors.getFaults()}')
-        
+        print(f'=== despues de paraSuave(): {motors.getFaults()}')
         
         plt.show()
         
