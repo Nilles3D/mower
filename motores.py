@@ -79,7 +79,7 @@ class motoresObj:
         return
     
     def _velMonitor(self):
-        print('motores  Monitor empezando')
+        print(f'motores  Monitor empezando con velocidades ({self.vel1}, {self.vel2})')
         mf1=0
         mf2=0
         monVinPrev=[0,0]
@@ -165,7 +165,7 @@ class motoresObj:
         self.vel2=int(vel_2)
         return vel_1, vel_2
     
-    def paraSuave(self):
+    def paraSuave(self,leaveOn=False):
         print('motores  Parando suavemente')
         self.vel(0,0)
         sleep(self._rato*(1+self.velMax/self.maxCambia))
@@ -176,8 +176,9 @@ class motoresObj:
             self._timeT.join()
         self.vel1act=0
         self.vel2act=0
-        print(f'motores Faults antes de motPara(): {motors.getFaults()}')
-        self.motPara()
+        if not leaveOn:
+            print(f'motores Faults antes de motPara(): {motors.getFaults()}')
+            self.motPara()
         return
     
     def motPara(self):

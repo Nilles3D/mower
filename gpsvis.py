@@ -84,9 +84,21 @@ def mapToRaw(mapFile: str):
     return
 
 if __name__ == '__main__':
-    tiemActual=os.path.getmtime(archivoActual)
-    tiemExport=os.path.getmtime(archivoExport)
-    tiemImport=os.path.getmtime(archivoImport)
+    if os.path.exists(archivoActual):
+        tiemActual=os.path.getmtime(archivoActual)
+    else:
+        print('No current file to update with.')
+        quit()
+    
+    if os.path.exists(archivoExport):
+        tiemExport=os.path.getmtime(archivoExport)
+    else:
+        tiemExport=0
+    if os.path.exists(archivoImport):
+        tiemImport=os.path.getmtime(archivoImport)
+    else:
+        tiemImport=0
+    
     if tiemExport<tiemActual:
         print('Actualizando '+archivoExport)
         rawToMap(archivoActual)

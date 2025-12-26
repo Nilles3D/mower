@@ -31,6 +31,7 @@ import bluetooth as bt
 #bt setup
 btGo=True
 btReady=False
+btClosed=False
 server_sock=bt.BluetoothSocket(bt.RFCOMM)
 port=22
 server_sock.bind(("",port))
@@ -53,9 +54,10 @@ def iniciar():
     global haConectado
     
     if not haConectado:
+        print("btApp    Esperando por conexion...")
         server_sock.listen(1)
     else:
-        print("BtApp    Buscando otra conexion...")
+        print("btApp    Buscando otra conexion...")
     client_sock,address=server_sock.accept()
     print("btApp    Conexion realizada con: ",address)
     
@@ -65,13 +67,18 @@ def iniciar():
     return
 
 def cerrar():
+    global btClosed
     global btReady
     global btGo
     print("btApp    cerrando...")
+    if not btClosed:
+        if 'client_sock' in globals():
+            client_sock.close()
+        if 'server_sock' in globals():
+            server_sock.close()
+    btClosed=True
     btReady=False
     btGo=False
-    client_sock.close()
-    server_sock.close()
     print("btApp    cerrado")
     return
     

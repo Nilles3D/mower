@@ -22,6 +22,7 @@ import os
 import statistics
 import threading
 import subprocess as sc
+import sys
 #semi-custom
 from simple_pid import PID
 from pyubx2 import ubxtypes_core as ubt
@@ -131,7 +132,7 @@ def ctrlLuces(rtk_Req):
             gnssPara.set()
             sinErr=False
     horaTTF=time.time()
-    print(f'ctrlLuces   Rato por primera 3D fix: {round(horaTTF-horaEntrada,1)}s')
+    print(f'ctrlLuces   Rato por primera 3D fix: {round(horaTTF-horaEntrada,2)}s')
     #si necesita un fix de mas alta calidad
     if rtk_Req and sinErr:
         ledBeacon.blink(on_time=onTime,off_time=offMedium)
@@ -150,12 +151,13 @@ def ctrlLuces(rtk_Req):
                 print('ctrlLuces    Excesso en esperar por un Fix Alta. gnssPara set')
                 gnssPara.set()
                 sinErr=False
-        print(f'ctrlLuces  Rato por alta 3D fix: {time.time()-horaTTF}s')
+        print(f'ctrlLuces  Rato por alta 3D fix: {round(time.time()-horaTTF,2)}s')
     #Avisar por encender el motor
-    horaInic1=time.time()+15#s
-    nB=int((onTime+offShort)/15)
+    ratoAviso=10#s
+    horaInic1=time.time()+ratoAviso
+    nB=int((onTime+offShort)/ratoAviso)
     ledBeacon.blink(on_time=onTime,off_time=offShort,n=nB)
-    print('ctrlLuces    On your marks, get set, ...')
+    print(f'ctrlLuces    Waiting {round(ratoAviso,1)}s before starting motors ...')
     while ((not gnssPara.is_set()) and (time.time()<horaInic1)) and sinErr:
         time.sleep(rato)
     #Iniciar
@@ -172,21 +174,27 @@ def ctrlLuces(rtk_Req):
     
     return sinErr
 
-def cambiaGirar(percIn,velL,velR):
+def cambiaGirar(percIn,vel1=None,vel2=None):
     '''
     given a unity input (percentage of maximum velocity)
         scales value to motor board's preferred map
+    or given explicit differentials
         positive required differential
          = positive percIn --> CCW spin of mower
+    changes wheel velocities
     echoes commanded velocities per motor
     '''
+    global motoObj
     
-    delRueda=-motoObj.velMax*percIn
-    velL=max(-motoObj.velMax,min(motoObj.vel1act+delRueda,motoObj.velMax))
-    velR=max(-motoObj.velMax,min(motoObj.vel2act+delRueda,motoObj.velMax))
-    motoObj.vel(velL,velR)
+    delRueda=motoObj.velMax*percIn
+    if vel1 is None:
+        vel1=max(-motoObj.velMax,min(int(motoObj.vel1act+delRueda),motoObj.velMax))
+    if vel2 is None:
+        vel2=max(-motoObj.velMax,min(int(motoObj.vel2act+delRueda),motoObj.velMax))
     
-    return velL,velR
+    motoObj.vel(vel1,vel2)
+    
+    return vel1,vel2
 
 def numRollingAvg(myList,myIndex,myValue):
     #given list of numbers, index of list to update, value to update that to
@@ -211,35 +219,35 @@ def cambiaControl(ratoSus=0, prueba=False):
     #returns nothing
     
     #inic
-    print('mower    Iniciando cambiaControl con ratoSus='+str(ratoSus))
+    print('cambiaControl    Iniciando cambiaControl con ratoSus='+str(ratoSus))
     timeCambia=time.time()
     ratoFin=False
     shutRequest=False
     shutStart=False
     global velL, velR
+    #tuned
+    potLeftBase=0.145
+    potLeftArriba=0.387
+    potRightBase=0.128
+    potRightArriba=0.311
+    #tuners
+    mm=[0,0]
+    mn=[100,100]
+    avl=[]
+    avr=[]
     #suave
-    histLeft=[0.001 for i in range(6)]
-    histRight=[0.002 for i in range(6)]
+    histLeft=[potLeftBase]*6
+    histRight=[potRightBase]*6
     histIndexL=0
     histIndexR=0
     adcLeft=0
     adcRight=0
     avgLeft=1
     avgRight=1
-    #tuned
-    potLeftBase=0.085
-    potLeftArriba=0.353
-    potRightBase=0.128
-    potRightArriba=0.290
-    #tuners
-    mm=[0,0]
-    mn=[100,100]
-    avl=[]
-    avr=[]
     
     while (not motoPara.is_set()) and (not ratoFin):
         if prueba:
-            print('mower    __')
+            print('cambiaControl    __')
         #get remote values
         if btApp.btReady: #remote control
             strLeft=min(max(-100,100+btApp.steerVal),100)/100
@@ -267,20 +275,19 @@ def cambiaControl(ratoSus=0, prueba=False):
         #send inputs to controller (forward only)
         velL,velR=motoObj.vel(cmdLeft,-cmdRight)
         if prueba:
-            print(f"mower    btApp.btReady = {btApp.btReady}")
-            print(f"mower    btApp.powerVal = {btApp.powerVal}")
-            print(f"mower    btApp.steerVal = {btApp.steerVal}")
-            print('mower    adcLeft='+str(adcLeft))
-            print('mower    adcRight='+str(adcRight))
-            print('mower    avgs='+str([round(avgLeft,2),round(avgRight,2)]))
-            print('mower    vels='+str([velL, velR]))
+            print(f"cambiaControl    btApp.btReady = {btApp.btReady}")
+            print(f"cambiaControl    btApp.powerVal = {btApp.powerVal}")
+            print(f"cambiaControl    btApp.steerVal = {btApp.steerVal}")
+            print('cambiaControl    adcs='+str([round(adcLeft,2),round(adcRight,2)]))
+            print('cambiaControl    avgs='+str([round(avgLeft,2),round(avgRight,2)]))
+            print('cambiaControl    vels='+str([velL, velR]))
                 
         #throw timeout flag
         timeElapsed=time.time()-timeCambia
         if prueba:
             # ~ shutStart=True
-            print('mower    ET='+str(round(timeElapsed,2)))
-            print(f"mower    ratoSus = {ratoSus}")
+            print('cambiaControl    ET='+str(round(timeElapsed,2)))
+            print(f"cambiaControl    ratoSus = {ratoSus}")
         #seek requests for shutdown
         if (btApp.btReady and abs(btApp.powerVal)<=5): #priority to remote control
             shutRequest=True
@@ -291,16 +298,16 @@ def cambiaControl(ratoSus=0, prueba=False):
         #act on said requests
         if shutRequest:
             if (not shutStart) and (ratoSus>0):
-                print('mower     Throttle shutdown bandera sacado en '+str(round(timeElapsed,1)))
+                print('cambiaControl     Throttle shutdown bandera sacado en '+str(round(timeElapsed,1)))
                 timeCambia=time.time()
                 shutStart=True
         else:
             if shutStart and ratoSus>0:
-                print('mower     Throttle shutdown bandera despejado en '+str(round(timeElapsed,1)))
+                print('cambiaControl     Throttle shutdown bandera despejado en '+str(round(timeElapsed,1)))
                 shutStart=False
         #late test check
         if prueba:
-            print(f"mower    shutStart = {shutStart}")
+            print(f"cambiaControl    shutStart = {shutStart}")
             
         ratoFin=((ratoSus>0) and (time.time()-timeCambia>ratoSus) and shutStart)
         
@@ -311,19 +318,22 @@ def cambiaControl(ratoSus=0, prueba=False):
     dt=''
     if motoPara.is_set():
         dt+=' motoPara'
+        autonomy=True
+    else:
+        autonomy=False
     if ratoFin:
         dt+=' ratoFin'
-        motoObj.paraSuave()
-    print(f'mower    Saliendo cambiaControl por{dt}')
+        motoObj.paraSuave(leaveOn=autonomy)
+    print(f'cambiaControl    Saliendo cambiaControl por{dt}')
     
     if prueba:
-        print(f'mower          L     R')
-        print(f'mower    min: {round(mn[0],3):04.3f}, {round(mn[1],3):04.3f}')
-        print(f'mower    max: {round(mm[0],3):04.3f}, {round(mm[1],3):04.3f}')
+        print(f'cambiaControl          L     R')
+        print(f'cambiaControl    min: {round(mn[0],3):04.3f}, {round(mn[1],3):04.3f}')
+        print(f'cambiaControl    max: {round(mm[0],3):04.3f}, {round(mm[1],3):04.3f}')
         mfl=statistics.fmean(avl)
         mfr=statistics.fmean(avr)
-        print(f'mower    avg: {round(mfl,3):04.3f}, {round(mfr,3):04.3f}')
-        print(f'mower    alp: {round((mfl-potLeftBase)/(potLeftArriba-potLeftBase),2):.0%}, {round((mfr-potRightBase)/(potRightArriba-potRightBase),2):.0%}')
+        print(f'cambiaControl    avg: {round(mfl,3):04.3f}, {round(mfr,3):04.3f}')
+        print(f'cambiaControl    alp: {round((mfl-potLeftBase)/(potLeftArriba-potLeftBase),2):.0%}, {round((mfr-potRightBase)/(potRightArriba-potRightBase),2):.0%}')
     
     #shutdown
     # ~ ledMotores.blink(on_time=onTime,off_time=offShort,n=4)
@@ -452,7 +462,7 @@ def mowerInic(prueba=False):
     archivoGuia=arcRuta+'rutaSeguida.txt'
     opcion=False
     
-    print('mower    Esperando por eligiones humanos...')
+    print('mowerInic    Esperando por eligiones humanos...')
     ledBeacon.blink(on_time=onTime, off_time=offLong)
     while horaEn<horaLim and not opcion:
         #read possible switches
@@ -492,7 +502,7 @@ def mowerInic(prueba=False):
                         datPointList.append(ll)
                 #cut
                 print(f'mowerInic   siguiendo {len(datPointList)} puntos en linea')
-                sinErrores=cortar(datPointList)
+                sinErrores=cortar(datPointList,prueba)
             else:
                 print('mowerInic    !!! No pude continuar con cortar sin GPS')
                 sinErrores=False
@@ -520,52 +530,59 @@ def mowerInic(prueba=False):
     
     return sinErrores
 
-def mowerPara(errStop):
+def mowerPara(errStop,autonomous=False):
+    #release of manual controls and possible motion shutdown
     
     print(f'mowerPara   Detente solicitado con emergencia = {errStop}')
     
     #cut engines
     if errStop:
         motoObj.motPara()
-    else:
+    elif not autonomous:
         motoObj.paraSuave()
     print('mowerPara    Motores han sido apagados')
     if motoObj.errores:
         errStop=True
+    
+    #quit controls
     motoPara.set()
     print('mowerPara    Controles manuales apagando')
     if btApp.btReady:
         btApp.cerrar()
     print('mowerPara    BT conexion ha sido apagado')
-    global velL, velR
-    velL=0
-    velR=0
-    #release GNSS
-    # ~ gnss.gnssParar()
-    gnssPara.set()
-    time.sleep(2)
-    print('mowerPara    GNSS para solicitado')
-    if not gnaObj is None:
-        gnaObj.stop()
-    print('mowerPara    GNSS han sido apagado')
     
-    #stop lights
-    # ~ ctrlLuces(False)
-    ledError=gp.LED(21)
-    if errStop:
-        if not mowerLog is None:
-            mowerLog.close()
-        ledBeacon.blink(on_time=onTime,off_time=offShort,n=60)
-        ledError.blink(on_time=onTime,off_time=offShort,n=60)
-        time.sleep(30)
-    else:
-        ledError.on()
-    #release & reinstate GPIO
-    ledBeacon.close()
-    print('mowerPara    Luces han sido apagados')
-    print(sc.run(["pinctrl set 19 pd"],shell=True,text=True,check=True))
-    ledError.close()
-    print(sc.run(["pinctrl set 21 pd"],shell=True,text=True,check=True))
+    #late shutdowns
+    if not autonomous:
+        global velL, velR
+        velL=0
+        velR=0
+        
+        #release GNSS
+        # ~ gnss.gnssParar()
+        gnssPara.set()
+        time.sleep(2)
+        print('mowerPara    GNSS para solicitado')
+        if not gnaObj is None:
+            gnaObj.stop()
+        print('mowerPara    GNSS han sido apagado')
+        
+        #stop lights
+        # ~ ctrlLuces(False)
+        ledError=gp.LED(21)
+        if errStop:
+            if not mowerLog is None:
+                mowerLog.close()
+            ledBeacon.blink(on_time=onTime,off_time=offShort,n=60)
+            ledError.blink(on_time=onTime,off_time=offShort,n=60)
+            time.sleep(30)
+        else:
+            ledError.on()
+        #release & reinstate GPIO
+        ledBeacon.close()
+        print('mowerPara    Luces han sido apagados')
+        print(sc.run(["pinctrl set 19 pd"],shell=True,text=True,check=True))
+        ledError.close()
+        print(sc.run(["pinctrl set 21 pd"],shell=True,text=True,check=True))
     
     print('mowerPara    fin')
     
@@ -629,7 +646,7 @@ def recordar(prlist=[],verbose=False):
     
     return hazRec, archivoRuta
 
-def cortar(datPointList):
+def cortar(datPointList, verbose=False):
     #follows given coordinate list
     #returns general status
     
@@ -659,7 +676,8 @@ def cortar(datPointList):
     jogNow=True
     gpsHead=0
     #spin to win
-    print(f'cortar   Iniciando desde {gpsPointPrev}')
+    print(f'cortar   Iniciando desde {gpsPointPrev} lat/lon')
+    print(f'cortar   Primer punto es {datPointNext} lat/lon')
     while goMow and (abs(headDel)>5):
         #determine required heading to intended position
         rumPrimera=gc.numRumbo(gpsPointPrev,datPointNext) #deg
@@ -673,9 +691,9 @@ def cortar(datPointList):
                 #eval
                 gpsPointJog=gnaObj.get_position()
                 if gc.numLejo(gpsPointPrev,gpsPointJog)<0.05:
-                    print(f'cortar  cero desde cero, {gpsPointJog}')
+                    print(f'cortar  cero desde cero, {gpsPointJog} lat/lon')
                 else:
-                    print(f'cortar  de {gpsPointPrev} hasta {gpsPointJog}')
+                    print(f'cortar  de {gpsPointPrev} hasta {gpsPointJog} lat/lon')
                     gpsHead=gc.numRumbo(gpsPointPrev,gpsPointJog)
                     print(f'cortar  Aproximamente {round(gpsHead,0)} deg')
                     gpsPointPrev=gpsPointJog
@@ -688,7 +706,9 @@ def cortar(datPointList):
         headDel=gc.numGirar(gpsHead,rumPrimera) #deg
         #rotate to heading
         pidR=pidDeg(headDel)
-        # ~ velL,velR=cambiaGirar(pidR,velL,velR)
+        if verbose:
+            print(f'cortar  pidR={pidR}')
+        velL,velR=cambiaGirar(pidR)
         time.sleep(pidDeg.sample_time)
         #timeout
         if (time.time()-td0>20):
@@ -709,11 +729,13 @@ def cortar(datPointList):
         # ~ velL,velR=motoObj.vel(spdPerc*velL,spdPerc*velR)
         # ~ time.sleep(0.1)
     #kick speed up if started too close to first point
-    if velL<=0.25*480:
+    if velL<=0.25*480 and goMow:
         print(f'cortar  Necesite amplicar los velocidades un poco desde {velL}, {velR}')
         velL=0.75*480
         velR=-velL
         velL,velR=motoObj.vel(velL,velR)
+    else:
+        velL,velR=motoObj.vel(0,0)
     
     
     #Iniciar cortar
@@ -731,7 +753,8 @@ def cortar(datPointList):
     # ~ ledProcess.blink(onTime,offLong)
     for datPoint in datPointList:
         
-        print(f'cortar  Yendo a {datPoint}')
+        if goMow:
+            print(f'cortar  Yendo a {datPoint} lat/lon')
         
         while goMow and not targetReached:
             
@@ -745,7 +768,8 @@ def cortar(datPointList):
                 #continue
                 distToNextPoint=gc.numLejo(gpsPointCurr,datPoint) #m
                 degHeadingIntend=gc.numRumbo(gpsPointCurr,datPoint) #brujula degrees
-                print(f'cortar  Estoy a{round(distToNextPoint,2)}m a distancia en {gpsPointCurr} lat./lon. con intento a {round(degHeadIntend,0)} deg.')
+                if verbose:
+                    print(f'cortar  Estoy a{round(distToNextPoint,2)}m a distancia en {gpsPointCurr} lat./lon. con intento a {round(degHeadIntend,0)} deg.')
                 
                 #Continue if point is in front of mower
                 if degHeadingIntend<110:
@@ -782,9 +806,10 @@ def cortar(datPointList):
                         velR*=0.9
                         velL,velR=motoObj.vel(velL,velR)
                     #input of heading differential (degree value amount needed)
-                    pidR=pidDeg(degChangeReq)
-                    velL,velR=cambiaGirar(pidR,velL,velR)
-                    print(f'cortar  Estoy progresando con ({velL}, {velR}) m/s a {round(degHeadActualAvg,0)} deg.')
+                    pidR=pidDeg(degChangeReq) #%
+                    velL,velR=cambiaGirar(pidR)
+                    if verbose:
+                        print(f'cortar  Estoy progresando con ({velL}, {velR}) m/s a {round(degHeadActualAvg,0)} deg.')
                     
                     #reset
                     errPerd=0
@@ -803,7 +828,7 @@ def cortar(datPointList):
                     goMow=False
             #end GNSS positioning
             
-            if errPerd>5:
+            if errPerd>20:
                 # ~ ledError.on()
                 print('cortar   !!! Muchos puntos perdidos en sequencia. Parandome')
                 goMow=False
@@ -956,6 +981,7 @@ if __name__ == '__main__':
         print(mowerInic(True))
     
     finally:
+        print('__casi completa__')
         mowerPara(False)
         print('__prueba completa__')
         for t in threading.enumerate():
@@ -966,7 +992,6 @@ else:
     motoObj=motores.motoresObj()
     print('mower    Acabo de empezar')
     
-    import sys
     stdoutOld=sys.stdout
     fechaLog=fileMan.prefixMatch(arcRuta+'logs/',str(fecha))
     logFile=fechaLog+'.txt'
