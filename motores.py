@@ -24,6 +24,10 @@ class motoresObj:
         
         self.errores=False
         
+        #high-level instructions
+        self.fwdRev=0 #[-100,100]
+        self.steer=0 #[-200,200]
+        
         #velocidades iniciadas
         self.vel1=0 #ordenado
         self.vel1act=0 #actual
@@ -39,8 +43,8 @@ class motoresObj:
         
         #iniciar
         self._timeT=Thread(target=self._timer,args=())
-        if probar:
-            self._timeT.start()
+        #if probar:
+        #    self._timeT.start()
         self._motInic()
         
         return
@@ -128,7 +132,7 @@ class motoresObj:
             #monitor
             if self.prueba:
                 if ([self.vel1,self.vel2]!=monVinPrev) or ([self.vel1act,self.vel2act]!=monVoutPrev):
-                    print(f'motores  dado {self.vel1}, {self.vel2} | usar {self.vel1act}, {self.vel2act}')
+                    #print(f'motores  dado {self.vel1}, {self.vel2} | usar {self.vel1act}, {self.vel2act}')
                     monVinPrev=[self.vel1,self.vel2]
                     monVoutPrev=[self.vel1act,self.vel2act]
             
@@ -160,10 +164,22 @@ class motoresObj:
         
         return
     
-    def vel(self,vel_1,vel_2):
-        self.vel1=int(vel_1)
-        self.vel2=int(vel_2)
-        return vel_1, vel_2
+    def vel(self,power100,steer200):
+        #power = 100 = full forward, -100 = reverse
+        #steer = 200 = max CW spin, -200 = max CCW spin, 0 = straight
+        
+        #sanitize
+        self.fwdRev=max(-100,min(int(power100),100))
+        self.steer=max(-200,min(int(steer200),200))
+        #convert to unit values
+        steerLeft=min(max(-100,100+self.steer),100)/100
+        steerRight=min(max(-100,100-self.steer),100)/100
+        pwrLvl=min(max(-100,self.fwdRev),100)/100
+        #put into wheels
+        self.vel1=max(-self.velMax,min(int(steerLeft*pwrLvl*self.velMax),self.velMax))
+        self.vel2=max(-self.velMax,min(int(-steerRight*pwrLvl*self.velMax),self.velMax))
+        
+        return power100, steer200
     
     def paraSuave(self,leaveOn=False):
         print('motores  Parando suavemente')
@@ -191,58 +207,63 @@ class motoresObj:
 
 if __name__ == '__main__':
     print('__ Motores ha empezado')
-    import matplotlib.pyplot as plt
+    # ~ import matplotlib.pyplot as plt
     
-    try:
-        ruedas=motoresObj(True)
-        
-        #visualize
-        fig, ax = plt.subplots()
-        
-        #square waves
-        ySq=[0]
-        x1=[0]
-        y1=[0]
-        t1=time()
-        for sqVel in [-480*.75, -480*.6, -480*.1, -480*1.0, 0]:
-            ruedas.vel(sqVel,0)
-            t1b=time()
-            while (time()-t1b<1.2):
-                x1.append(round(time()-t1,2))
-                y1.append(ruedas.vel1act)
-                ySq.append(sqVel)
-                sleep(ruedas._rato)
-        ax.plot(x1,ySq,linewidth=1.0)
-        ax.plot(x1,y1,linewidth=2.0)
-        
-        #multi-step triangle wave
-        ruedas.vel(0,0)
-        yTr=[0]
-        x2=[0]
-        y2=[0]
-        velRampa=list(range(0,500,5))#+list(range(480,0,-5))#+list(range(-480,0,5))+[0]
-        t2=time()
-        for v in velRampa:
-            ruedas.vel(0,v)
-            sleep(ruedas._rato/2)
-            x2.append(round(time()-t2,2))
-            y2.append(ruedas.vel2act)
-            yTr.append(v)
-        ax.plot(x2,yTr,linewidth=1.0)
-        ax.plot(x2,y2,linewidth=2.0)
-            
-        print(f'=== faults antes de paraSuave(): {motors.getFaults()}')
-        ruedas.paraSuave()
-        print(f'=== despues de paraSuave(): {motors.getFaults()}')
-        
-        plt.show()
-        
-        ruedas.paraSuave()
+    # ~ try:
+    ruedas=motoresObj(True)
+    ruedas.vel(75,80)
+    sleep(1)
     
-    except KeyboardInterrupt:
-        ruedas.motPara()
+    #visualize
+    # ~ fig, ax = plt.subplots()
+    '''
+    #square waves
+    ySq=[0]
+    x1=[0]
+    y1=[0]
+    t1=time()
+    print('MOTORES  Square wave')
+    for sqVel in [-75, 40, -10, -100, 0]:
+        ruedas.vel(sqVel,0)
+        t1b=time()
+        while (time()-t1b<1.2):
+            x1.append(round(time()-t1,2))
+            y1.append(ruedas.vel1act)
+            ySq.append(sqVel)
+            sleep(ruedas._rato)
+    ax.plot(x1,ySq,linewidth=1.0)
+    ax.plot(x1,y1,linewidth=2.0)
+    '''
+    #multi-step triangle wave
+    ruedas.vel(0,0)
+    yTr=[0]
+    x2=[0]
+    y2=[0]
+    velRampa=list(range(0,200,10))#+list(range(200,0,-5))#+list(range(-2000,0,5))+[0]
+    t2=time()
+    print('MOTORES  Ramp up/down')
+    for v in velRampa:
+        ruedas.vel(60,v)
+        print(v)
+        sleep(1)#ruedas._rato)
+    '''    x2.append(round(time()-t2,2))
+        y2.append(ruedas.vel2act)
+        yTr.append(v)
+    ax.plot(x2,yTr,linewidth=1.0)
+    ax.plot(x2,y2,linewidth=2.0)
     
-    finally:
-        motors.forceStop()
+    print(f'=== faults antes de paraSuave(): {motors.getFaults()}')
+    ruedas.paraSuave()
+    print(f'=== despues de paraSuave(): {motors.getFaults()}')
     
-    ('__ Motores ha parado')
+    plt.show()
+    '''
+    ruedas.paraSuave()
+    
+    # ~ except KeyboardInterrupt:
+        # ~ ruedas.motPara()
+    
+    # ~ finally:
+        # ~ motors.forceStop()
+    
+    print('__ Motores ha parado')

@@ -52,7 +52,8 @@ class GNSSBarebones:
         self.lon = 0
         self.alt = 0
         self.sep = 0
-        self.heading = 0 #headMot?
+        self.heading = 0 #motHeading or heading
+        self.speed = 0 #mm/s
         self.fixType = 0
         self.verbose = verbose
         
@@ -188,8 +189,15 @@ class GNSSBarebones:
             self.sep = parsed_data.sep
         if hasattr(parsed_data, "hMSL") and hasattr(parsed_data, "height"):
             self.sep = (parsed_data.height - parsed_data.hMSL) / 1000
-        if hasattr(parsed_data, "heading"):
-            self.heading = parsed_data.heading
+        if hasattr(parsed_data, "motHeading"):
+            self.heading = parsed_data.motHeading #heading
+        if hasattr(parsed_data, "gSpeed"):
+            self.speed = parsed_data.gSpeed #ground speed
+            
+        #get all attributes
+        # ~ for attribute in dir(parsed_data):
+            # ~ print(attribute, getattr(parsed_data, attribute))
+
 
     def _extract_fixType(self, parsed_data: object, verbose=False):
         """
@@ -251,6 +259,7 @@ if __name__ == '__main__':
         print("Starting GNSS reader\n")
         newGna=gnssIniciar(stop_event, verbose=True)            
         sleep(20)
+        #print(newGna.heading)
         stop_event.set()
             
     except KeyboardInterrupt:
