@@ -25,6 +25,8 @@ import math
 
 import matplotlib.pyplot as plt
 
+import matplotlib.animation as animo
+
  
 
 # ---------------------------------------------------------
@@ -33,7 +35,13 @@ import matplotlib.pyplot as plt
 
 # ---------------------------------------------------------
 
+PCA_LINES = False #follows characteristic line, otherwise North-South
+
+SKIP = 2 #pass grouping: 1 = back to back, 2 = skip every other, 3 = skip two at a time
+
 IMPLEMENT_WIDTH = 0.5 #cut per pass
+
+ADD_ARCS = False #generate turning arcs at end of passes
 
 TURN_RADIUS_PREFERRED = 1.2
 
@@ -41,9 +49,11 @@ TURN_RADIUS_MIN = 0.4
 
 VEHICLE_WIDTH = 0.67 #"fit thru door" width
 
-SAFETY_MARGIN = 0.4
+SAFETY_MARGIN = 0.3
 
 TOTAL_MARGIN = SAFETY_MARGIN + VEHICLE_WIDTH / 2.0
+
+ANIMATED = True #show path point-by-point or as static image
 
  
 
@@ -268,7 +278,7 @@ def AB_points_NSbias(boundary_local):
     return tuple(A), tuple(B)
 
 
-if False:
+if PCA_LINES:
     A, B = AB_points_PCA(lawn)
 else:
     A, B = AB_points_NSbias(boundary_local)
@@ -394,12 +404,29 @@ def avg_x(line):
     return sum(xs) / len(xs)
     #return min(xs)
 
- 
 parallel_lines.sort(key=avg_x)
 
+def boustrophedon(lines): #flips pass direction
+    
+    ordered = []
+    
+    for i, ln in enumerate(lines):
+        
+        coords = list(ln.coords)
+        
+        if i % 2 == 0:
+            coords.reverse()
+            fwd = True
+        else:
+            fwd = False
+        
+        ordered.append([LineString(coords),fwd])
+    
+    return ordered
 
 alternating_lines = []
 
+''' only for 1x row grouping
 for idx, ln in enumerate(parallel_lines):
     
     ln=LineString(ln)
@@ -417,6 +444,14 @@ for idx, ln in enumerate(parallel_lines):
         fwd = False
 
     alternating_lines.append([coords, fwd])
+'''
+
+groups = [parallel_lines[i::SKIP] for i in range(SKIP)]
+
+ordered_groups = [boustrophedon(pass_group) for pass_group in groups]
+
+for g in ordered_groups:
+    alternating_lines.extend(g)
 
 
 # ---------------------------------------------------------
@@ -831,19 +866,20 @@ for i, ln in enumerate(ordered_passes):
         prev_line = ordered_passes[i - 1]
         prev_dir = np.array(prev_line.coords[-1]) - np.array(prev_line.coords[-2])
         next_dir = np.array(ln.coords[1]) - np.array(ln.coords[0])
+        
+        if ADD_ARCS:
+            arc = tangent_arc_between_passes(
+                prev_end,
+                curr_start,
+                prev_dir,
+                next_dir,
+                lawn,
+                hole_polygons
+            )
 
-        arc = tangent_arc_between_passes(
-            prev_end,
-            curr_start,
-            prev_dir,
-            next_dir,
-            lawn,
-            hole_polygons
-        )
-
-        if arc is not None:
-            continuous_coords.extend(list(arc.coords))
-            # ~ print(f'arc got {arc}')
+            if arc is not None:
+                continuous_coords.extend(list(arc.coords))
+                # ~ print(f'arc got {arc}')
 
         if coords[0] == continuous_coords[-1]:
             continuous_coords.extend(coords[1:])
@@ -870,7 +906,6 @@ transformer_inv = Transformer.from_crs(
 
 )
 
- 
 
 with open("mowing_path.txt", "w") as f:
     
@@ -878,8 +913,7 @@ with open("mowing_path.txt", "w") as f:
         
         lon, lat = transformer_inv.transform(x, y)
 
-        f.write(f"{lat} {lon}\n")
-
+        f.write(f"{round(lat,7)} {round(lon,7)}\n")
  
 
 print("Exported mowing_path.txt with", len(continuous_coords), "points")
@@ -902,7 +936,6 @@ lx, ly = lawn.exterior.xy
 
 ax.plot(lx, ly, color="black", linewidth=2, label="Lawn boundary")
 
- 
 
 # Holes
 
@@ -912,45 +945,60 @@ for hole in holes_local:
 
     ax.plot(hx, hy, color="orange", linewidth=2, label="No-go zone")
 
- 
 
 # Safe boundary
 
-sx, sy = lawn_safe.exterior.xy
+if hasattr(lawn_safe,"exterior"):
+    sx, sy = lawn_safe.exterior.xy
 
-ax.plot(sx, sy, color="green", linestyle="--", label="Safe boundary")
+    ax.plot(sx, sy, color="green", linestyle="--", label="Safe boundary")
+else:
+    print('lawn_safe could not be made with intersecting polygons.')
 
  
-
-# Passes
-
-# ~ for ln in ordered_passes:
-    # ~ x, y = ln.xy
-    # ~ ax.plot(x, y, color="blue")
-    
-for ln in plot_fwd:
-    x, y = ln.xy
-    ax.plot(x, y, color="blue")
-
-for ln in plot_rev:
-    x, y = ln.xy
-    ax.plot(x, y, color="red")
- 
-
 # Continuous path
 
 cx = [p[0] for p in continuous_coords]
 
 cy = [p[1] for p in continuous_coords]
 
-ax.plot(cx, cy, color="red", linewidth=1.5, label="Continuous path")  #hide to see which passes are reversed
 
  
+# Make plot
 
 ax.set_aspect("equal")
 
 ax.legend()
 
-plt.title("Mowing Path with Holes + Turning Arcs")
+if ANIMATED:
+    plt.title("Mowing Progress with Holes")
+    
+    line, = ax.plot([],[],color="red", linewidth=2)
+    ax.set_xlim(min(cx),max(cx))
+    ax.set_ylim(min(cy),max(cy))
+    
+    # animation helpers
+    def aniInit():
+        line.set_data([],[])
+        return (line,)
+    def frameUpdate(lineFrame):
+        line.set_data(cx[:lineFrame], cy[:lineFrame])
+        return (line,)
+    
+    ani = animo.FuncAnimation(fig, frameUpdate, frames = len(cx), init_func = aniInit, interval = 80, blit = True)
+    
+else:
 
+    plt.title("Mowing Path with Holes")
+    
+    for ln in plot_fwd:
+        x, y = ln.xy
+        ax.plot(x, y, color="blue")
+
+    for ln in plot_rev:
+        x, y = ln.xy
+        ax.plot(x, y, color="red")
+    
+    ax.plot(cx, cy, color="red", linewidth=1.5, label="Continuous path")  #hide to see which passes are reversed
+    
 plt.show()
