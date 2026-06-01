@@ -37,7 +37,7 @@ colores=[
 
 url='https://www.gpsvisualizer.com/draw'
 
-def rawToMap(rawFile: str,openHost=True):
+def rawToMap(rawFile: str,openHost=False):
     #lista de coordinates
     i=0
     cn=0
@@ -51,6 +51,7 @@ def rawToMap(rawFile: str,openHost=True):
             i+=1
             cn+=1
             cn=cn%len(colores)
+    print(f'{i} points read from {rawFile}')
     #lista por vis
     with open(archivoExport,'w') as ae:
         ae.write('\t'.join(titulos)+'\n')
@@ -60,6 +61,7 @@ def rawToMap(rawFile: str,openHost=True):
     #haz modificaciones
     if openHost:
         webbrowser.open(url)
+    print(archivoExport + ' written')
     return
 
 def mapToRaw(mapFile: str):
@@ -74,16 +76,35 @@ def mapToRaw(mapFile: str):
                 ll=[float(l[1]),float(l[2])]
                 datPointList.append(ll)
     #por mower
-    arcViejo=archivoActual[:-4]+'v'+archivoActual[-4:]
-    shutil.move(archivoActual,arcViejo)
-    with open(archivoActual,'w') as ai:
+    if os.path.exists(archivoImport):
+        arcViejo=archivoImport[:-4]+'v'+archivoImport[-4:]
+        shutil.move(archivoImport,arcViejo)
+    with open(archivoImport,'w') as ai:
         for dd in datPointList:
             datu=' '.join(str(ll) for ll in dd)
             ai.write(datu+'\n')
-    
+    print(archivoImport + ' updated')
     return
 
 if __name__ == '__main__':
+    
+    import easygui
+    
+    import_export = easygui.ynbox('Choose which data source','Import / Export',('mower --> Visualizer','Visualizer --> raw data'))
+    print(import_export)
+    
+    if import_export is not None: file_path = easygui.fileopenbox()
+    print(file_path)
+    
+    if import_export == True: #from raw mower to Vis
+        rawToMap(file_path)
+    elif import_export == False: #Vis to raw
+        mapToRaw(file_path)
+    else: #do nothing
+        print('canceled')
+        
+    #fallback
+    '''
     if os.path.exists(archivoActual):
         tiemActual=os.path.getmtime(archivoActual)
     else:
@@ -109,3 +130,4 @@ if __name__ == '__main__':
         print('Listo por Mower')
     else:
         print('Nada por hacer')
+    '''
