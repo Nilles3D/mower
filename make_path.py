@@ -35,11 +35,23 @@ import matplotlib.animation as animo
 
 # ---------------------------------------------------------
 
-PCA_LINES = False #follows characteristic line, otherwise North-South
+ANIMATED = True #show path point-by-point or as static image
 
-SKIP = 2 #pass grouping: 1 = back to back, 2 = skip every other, 3 = skip two at a time
+PCA_LINES = False #follows characteristic line, otherwise follow compass rose direction
+PCA_90 = False #reorientates PCA's AB line by 90 degrees
+
+NS_BANDS = True #orientate AB line mostly in a North-South (or East-West) direction
+EW_SIDE = False #flip edge to make NS/EW AB line from
+
+START_EAST = True #or North when AB line goes East-West
+
+SKIP = 1 #pass grouping: 1 = back to back, 2 = skip every other, 3 = skip two at a time
+
+SAFETY_MARGIN = 0.2
 
 IMPLEMENT_WIDTH = 0.5 #cut per pass
+
+VEHICLE_WIDTH = 0.67 #"fit thru door" width
 
 ADD_ARCS = False #generate turning arcs at end of passes
 
@@ -47,13 +59,11 @@ TURN_RADIUS_PREFERRED = 1.2
 
 TURN_RADIUS_MIN = 0.4
 
-VEHICLE_WIDTH = 0.67 #"fit thru door" width
-
-SAFETY_MARGIN = 0.3
+INTERPOLATION_DISTANCE = 2*IMPLEMENT_WIDTH #add points on line between coordinates
 
 TOTAL_MARGIN = SAFETY_MARGIN + VEHICLE_WIDTH / 2.0
 
-ANIMATED = True #show path point-by-point or as static image
+VERBOSE = False #print debug comments
 
  
 
@@ -79,7 +89,7 @@ def read_gps_file(filename):
 
                 continue
             
-            lat, lon = map(float, line.split(" "))
+            lat, lon, ber = map(float, line.split(" "))
 
             coords.append((lat, lon))
 
@@ -138,7 +148,6 @@ if current_hole:
 
 lat0, lon0 = boundary_gps[0]
 
- 
 
 transformer = Transformer.from_crs(
 
@@ -147,10 +156,8 @@ transformer = Transformer.from_crs(
     f"+proj=tmerc +lat_0={lat0} +lon_0={lon0} +k=1 +x_0=0 +y_0=0",
 
     always_xy=True
-
 )
 
- 
 
 def gps_to_local(lat, lon):
 
@@ -233,7 +240,10 @@ def AB_points_PCA(lawn_polygon):
     eigenvalues, eigenvectors = np.linalg.eig(cov)
 
     # Principal component = eigenvector with largest eigenvalue
-    idx = np.argmax(eigenvalues)
+    if PCA_90:
+        idx = np.argmin(eigenvalues)
+    else:
+        idx = np.argmax(eigenvalues)
     principal_axis = eigenvectors[:, idx]
 
     # Normalize direction
@@ -258,23 +268,44 @@ def AB_points_NSbias(boundary_local):
     Given tuple of ENU coordinates as outer shell limits
     Define A and B cooridinates based on top/bottom 25% latitude bands
     '''
-
+    
+    if NS_BANDS:
+        sort1 = 1
+        sort2 = 0
+    else: #make AB based on longitude bands
+        sort1 = 0 
+        sort2 = 1
+        
     # Sort all boundary points by latitude (north = larger y)
-    sorted_by_lat = sorted(boundary_local, key=lambda p: p[1], reverse=True)
-
+    sorted_by_lat = sorted(boundary_local, key=lambda p: p[sort1], reverse=True)
+    
     n = len(sorted_by_lat)
     quartile_count = max(1, n // 4)
 
     # Top & 25% northern points
     top_band = sorted_by_lat[:quartile_count]
     bottom_band = sorted_by_lat[-quartile_count:]
-
-    # A = most eastern point in the top 25%
-    A = max(top_band, key=lambda p: p[0])
-
-    # B = most eastern point in the bottom 25%
-    B = max(bottom_band, key=lambda p: p[0])
-
+    
+    if EW_SIDE:
+        # A = most eastern/northern point in the top 25%
+        A = max(top_band, key=lambda p: p[sort2])
+        # B = most eastern/northern point in the bottom 25%
+        B = max(bottom_band, key=lambda p: p[sort2])
+    else:
+        # A = most western/southern point in the top 25%
+        A = min(top_band, key=lambda p: p[sort2])
+        # B = most western/southern point in the bottom 25%
+        B = min(bottom_band, key=lambda p: p[sort2])
+        
+    if VERBOSE: 
+        print('NSbias')
+        print(f'    when NS_BANDS = {NS_BANDS} and EW_SIDE = {EW_SIDE}')
+        print(f'    sorted_by_lat = {sorted_by_lat}')
+        print(f'    n = {n}, quartile_count = {quartile_count}')
+        print(f'    top_band = {top_band}')
+        print(f'    bot_band = {bottom_band}')
+        print(f'    A = {A}, B = {B}')
+        print('')
     return tuple(A), tuple(B)
 
 
@@ -292,14 +323,17 @@ dy = B[1] - A[1]
 
 length = math.hypot(dx, dy)
 
+ab_ang = 180/np.pi * np.atan2(dy, dx) #mathematical degrees, not compass bearing
+print(f'AB line angle = {round(ab_ang,1)} degrees (math)')
+
 if length == 0:
 
     raise ValueError("A and B must be distinct.")
 
  
 nx = -dy / length
-
 ny = dx / length
+
 
 
 # ---------------------------------------------------------
@@ -315,7 +349,6 @@ ax, ay = A
 px = boundary_points[:, 0]
 
 py = boundary_points[:, 1]
-
  
 
 cross = np.abs((px - ax) * dy - (py - ay) * dx)
@@ -324,11 +357,9 @@ distances = cross / length
 
 max_dist = float(distances.max())
 
- 
 
 num_lines_each_side = math.ceil(max_dist / IMPLEMENT_WIDTH)
 
- 
 
 minx, miny, maxx, maxy = lawn.bounds
 
@@ -363,6 +394,7 @@ def stringTypeAppend(myList, myLine):
     return myList
 
 parallel_lines = []
+parallel_lines_plot = []
 
 # Generate all lines
 
@@ -374,7 +406,6 @@ for i in range(-num_lines_each_side, num_lines_each_side + 1):
 
     parallel = translate(ab_line, xoff=offset_x, yoff=offset_y)
 
- 
 
     lminx, lminy, lmaxx, lmaxy = parallel.bounds
 
@@ -387,7 +418,7 @@ for i in range(-num_lines_each_side, num_lines_each_side + 1):
         continue
     
     parallel_lines = stringTypeAppend(parallel_lines, parallel)
-        
+    parallel_lines_plot.extend(list(parallel.coords))
  
 # ---------------------------------------------------------
 
@@ -396,15 +427,19 @@ for i in range(-num_lines_each_side, num_lines_each_side + 1):
 # ---------------------------------------------------------
 
 def avg_x(line):
-    
     line=LineString(line)
-    
     xs, _ = line.xy
-
     return sum(xs) / len(xs)
-    #return min(xs)
+def avg_y(line):
+    line=LineString(line)
+    _, ys = line.xy
+    return sum(ys) / len(ys)
 
-parallel_lines.sort(key=avg_x)
+# preliminary sort based on mathematical angle of passes
+if 45<=abs(ab_ang) and abs(ab_ang)<135: #north-south AB line
+    parallel_lines.sort(key=avg_x, reverse=START_EAST)
+else: #east-west AB line
+    parallel_lines.sort(key=avg_y, reverse=START_EAST)
 
 def boustrophedon(lines): #flips pass direction
     
@@ -425,26 +460,6 @@ def boustrophedon(lines): #flips pass direction
     return ordered
 
 alternating_lines = []
-
-''' only for 1x row grouping
-for idx, ln in enumerate(parallel_lines):
-    
-    ln=LineString(ln)
-    
-    coords = list(ln.coords)
-
-    if idx % 2 == 1:
-
-        coords.reverse()
-        
-        fwd = True
-    
-    else:
-        
-        fwd = False
-
-    alternating_lines.append([coords, fwd])
-'''
 
 groups = [parallel_lines[i::SKIP] for i in range(SKIP)]
 
@@ -515,24 +530,17 @@ min_index = 0
 
 ordered_passes = []
 
-for idx, to_point in enumerate(c_starts_temp):
+for from_point in enumerate(c_starts_temp):
     
     #get rid of where we're starting since we cannot start there again
     c_starts_temp = np.delete(c_starts_temp, min_index, 0)
     
-    #handle first values
-    if idx == 0:
-        ordered_passes.append(LineString(c_passes_temp[0]))
-        xy_end = np.array(c_ends_temp[0])
-    else:
-        #assign endpoint found in previous loop
-        xy_end = np.array(c_ends_temp[min_index])
-        #add closest line as found in the previous loop
-        chosen_line = LineString(c_passes_temp[min_index])
-        ordered_passes.append(chosen_line)
+    #assign endpoint found in previous loop
+    xy_end = np.array(c_ends_temp[min_index])
     
-    #remove line to keep all arrays the same length
-    c_passes_temp.pop(min_index) # = np.delete(c_passes_temp, min_index, 0)
+    #remove closest line to keep all arrays the same length
+    c_pass_used = c_passes_temp.pop(min_index)
+    ordered_passes.append(LineString(c_pass_used))
     
     #remove current endpoint since we're about to use it up
     c_ends_temp = np.delete(c_ends_temp, min_index, 0)
@@ -570,8 +578,9 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
     p2 = np.array((*p2,0))
     v1 = np.array((*v1,0))
     v2 = np.array((*v2,0))
-    # ~ print(f'from {p1} to {p2}')
-    # ~ print(f'    dir {v1} to {v2}')
+    if VERBOSE:
+        print(f'from {p1} to {p2}')
+        print(f'    dir {v1} to {v2}')
     
     #Make direction vectors into unit vectors
     def unitize(vector):
@@ -579,7 +588,7 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
         return vector/norm
     v1 = np.array(unitize(v1))
     v2 = np.array(unitize(v2))
-    # ~ print(f'    unit {v1} to {v2}')
+    if VERBOSE: print(f'    unit {v1} to {v2}')
     
     #=====
     # Distances and Angles
@@ -587,29 +596,30 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
     
     #Angle of turn
     vdot = np.dot(v1, v2)
-    # ~ print(f'    vdot {vdot}')
+    if VERBOSE: print(f'    vdot {vdot}')
     turn_angle = math.acos(np.clip(vdot, -1.0, 1.0)) #credit: math.ttu.edu
     if turn_angle < math.pi/2: #short turn bypass
         seg = LineString([tuple(p1)[:-1], tuple(p2)[:-1]])
         if lawn.contains(seg) and all(not seg.intersects(h) for h in hole_polygons):
-            # ~ print('== segmented')
+            if VERBOSE: print('== segmented')
             return seg
-    # ~ print(f'    at angle {turn_angle} rad')
     
     #Vector from p1 to p2
     d = np.subtract(p2, p1)
-    # ~ print(f'    separation {d}')
     
     #Minimum distances from points to other direction vector
     m1 = np.cross(-d, v2) #credit: math.lsa.umich.edu
-    # ~ print(f'    m1 cross = {m1}')
     m1 = np.linalg.norm(m1) #dist from p1 to v2
-    # ~ print(f'    p1 to v2 = {m1}')
     m2 = np.linalg.norm(np.cross(d, v1))
-    # ~ print(f'    p2 to v1 = {m2}')
     #Chosen radius of turn
     R = max(TURN_RADIUS_MIN, min(m1/2, m2/2, TURN_RADIUS_PREFERRED))
-    # ~ print(f'    Turn radius is {round(R,2)}m')
+    if VERBOSE:
+        print(f'    at angle {turn_angle} rad')
+        print(f'    separation {d}')
+        print(f'    m1 cross = {m1}')
+        print(f'    p1 to v2 = {m1}')
+        print(f'    p2 to v1 = {m2}')
+        print(f'    Turn radius is {round(R,2)}m')
     
     #=====
     # Helper functions
@@ -626,11 +636,6 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
         p_from (p1/p2) = point on v_along
         radius (R) = target distance between arc center and p_from
         '''
-        # ~ print('orth_comp_center given:')
-        # ~ print(f'    v_angled = {v_angled}')
-        # ~ print(f'    v_along = {v_along}')
-        # ~ print(f'    p_from = {p_from}')
-        # ~ print(f'    radius = {radius}')
         
         #Projected vector of Angled onto Along
         v_ang_len = np.hypot(v_angled[0],v_angled[1])
@@ -643,9 +648,16 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
         dir_from_p = unitize(orth_ang_on_along)
         arc_center = p_from + R*dir_from_p
         
-        # ~ print('--orth_comp_center made: ')
-        # ~ print(f'    dir_from_p = {dir_from_p}')
-        # ~ print(f'    arc_center = {arc_center}')
+        if VERBOSE:
+            print('orth_comp_center given:')
+            print(f'    v_angled = {v_angled}')
+            print(f'    v_along = {v_along}')
+            print(f'    p_from = {p_from}')
+            print(f'    radius = {radius}')
+            print('--orth_comp_center made: ')
+            print(f'    dir_from_p = {dir_from_p}')
+            print(f'    arc_center = {arc_center}')
+        
         return dir_from_p, arc_center
     
     def rotated_point(orig_dir, from_point, angle, radius):
@@ -655,11 +667,6 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
           starts from and about point "from_point"
         orig_dir and from_point = [x, y]
         '''
-        # ~ print('rotated_point given:')
-        # ~ print(f'    orig_dir = {orig_dir}')
-        # ~ print(f'    from_point = {from_point}')
-        # ~ print(f'    angle = {angle}')
-        # ~ print(f'    radius = {radius}')
         
         #make unit vector for sure
         orig_dir = unitize(orig_dir)
@@ -671,7 +678,14 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
         new_point = from_point + radius*dir_to_new
         new_point = new_point[:-1]
         
-        # ~ print(f'--rotated_point = {new_point}')
+        if VERBOSE:
+            print('rotated_point given:')
+            print(f'    orig_dir = {orig_dir}')
+            print(f'    from_point = {from_point}')
+            print(f'    angle = {angle}')
+            print(f'    radius = {radius}')
+            print(f'--rotated_point = {new_point}')
+        
         return new_point #[x,y]
     
     #=====
@@ -681,7 +695,8 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
     #Define the center and points of the arc
     # using logic if p2 is "in the distance" from p1
     if np.dot(d,v1)>0: #arc is defined by p2
-        # ~ print('Arc is connected to destination')
+        if VERBOSE: print('Arc is connected to destination')
+        
         #orth_v = from line-point to arc center
         orth_v, arc_ctr = orth_comp_center(-d, v2, p2, R)
         
@@ -696,7 +711,8 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
         arc = LineString(arc_points[:-1])
         
     else: #arc starts right away at p1
-        # ~ print('Arc is connected to start')
+        if VERBOSE: print('Arc is connected to start')
+        
         orth_v, arc_ctr = orth_comp_center(d, v1, p1, R)
         
         #Determine if turn should be left/right
@@ -706,144 +722,23 @@ def tangent_arc_between_passes(p1, p2, v1, v2, lawn, hole_polygons, num_points=6
         arc_points = [rotated_point(-orth_v, arc_ctr, theta, R) for theta in np.linspace(0, turn_sign*turn_angle, num_points)]
         arc = LineString(arc_points[1:])
         
-    # ~ print(f'== {arc}')
+    if VERBOSE: print(f'== {arc}')
     
     #=====
     # Double-check fitment
     #=====
     
     if not lawn.contains(arc):
-        # ~ print('== out of bounds')
+        if VERBOSE: print('== out of bounds')
         return None
     if any(arc.intersects(h) for h in hole_polygons):
-        # ~ print('== fell in a hole')
+        if VERBOSE: print('== fell in a hole')
         return None
     
-    # ~ print('')
+    if VERBOSE: print('')
     return arc
-    
-    '''
-    """
-    BY COPILOT
-    Create a tangent circular arc between two passes with automatically
-    computed radius. No preferred or minimum radius is used.
-
-    p1 = end point of previous pass (x,y)
-    p2 = start point of next pass (x,y)
-    v1 = direction vector of previous pass (not necessarily unit)
-    v2 = direction vector of next pass (not necessarily unit)
-    lawn = full lawn polygon (with holes)
-    hole_polygons = list of hole polygons
-    """
-
-    p1 = np.array(p1, float)
-    p2 = np.array(p2, float)
-    print(f'from {p1} to {p2}')
-
-    # Normalize direction vectors
-    v1 = np.array(v1, float)
-    v2 = np.array(v2, float)
-    v1 /= np.linalg.norm(v1)
-    v2 /= np.linalg.norm(v2)
-    print(f'    dir {v1} to {v2}')
-
-    # Angle between directions
-    dot = np.clip(np.dot(v1, v2), -1.0, 1.0)
-    theta = math.acos(dot)
-    print(f'    at angle {theta} rad')
-
-    # If nearly collinear, no arc needed
-    if theta < 1e-6:
-        seg = LineString([tuple(p1), tuple(p2)])
-        if lawn.contains(seg) and all(not seg.intersects(h) for h in hole_polygons):
-            print('== segmented')
-            return seg
-        print('== colinear')
-        return None
-
-    # ---------------------------------------------------------
-    # Compute the unique tangent arc radius
-    # ---------------------------------------------------------
-    # The tangent arc must touch both lines at equal distance d from p1 and p2.
-    # The distance between tangent points is:
-    #     chord_length = ||p2 - p1||
-    # And the radius is:
-    #     R = chord_length / (2 * sin(theta/2))
-    #
-    # This is the ONLY radius that produces a tangent arc between two lines.
-    # ---------------------------------------------------------
-
-    chord = p2 - p1
-    chord_length = np.linalg.norm(chord)
-    print(f'    chord length {chord_length}')
-
-    # If chord is zero, no arc possible
-    if chord_length < 1e-9:
-        print('== same point')
-        return None
-
-    R = chord_length / (2.0 * math.sin(theta / 2.0))
-    print(f'    Turn radius is {round(R,2)}m')
-
-    # Distance from endpoints to tangent points
-    d = R * math.atan(theta / 2.0)
-    print(f'    end-tan distance {d}')
-
-    # Tangent points
-    t1 = p1 + v1 * d
-    t2 = p2 - v2 * d
-    print(f'Now tangent points {t1} to {t2}')
-
-    # ---------------------------------------------------------
-    # Compute arc center
-    # ---------------------------------------------------------
-    n1 = np.array([-v1[1], v1[0]])
-    n2 = np.array([-v2[1], v2[0]])
-
-    A = np.vstack([n1, -n2]).T
-    b = (t2 - t1)
-    print(f'    linalg given {A} and {b}')
-    
-    try:
-        lam = np.linalg.solve(A, b)
-        print(f'    linear algebra solution {lam}')
-    except np.linalg.LinAlgError:
-        print('!!! linalg.solve failed')
-        return None
-
-    C = t1 + n1 * lam[0]
-    print(f'    arc center {C}')
-
-    # ---------------------------------------------------------
-    # Build the arc
-    # ---------------------------------------------------------
-    vC1 = t1 - C
-    vC2 = t2 - C
-    a1 = math.atan2(vC1[1], vC1[0])
-    a2 = math.atan2(vC2[1], vC2[0])
-
-    # Shortest sweep direction
-    diff = (a2 - a1 + math.pi) % (2 * math.pi) - math.pi
-    angles = [a1 + diff * t for t in np.linspace(0, 1, num_points)]
-    # ~ print(f'    angles {angles}')
-    
-    arc_pts = [C + np.array([math.cos(a), math.sin(a)]) * R for a in angles]
-    arc = LineString(arc_pts)
-    print(f'== path {arc}')
-    
-    # ---------------------------------------------------------
-    # Validate arc: must stay inside lawn and avoid holes
-    # ---------------------------------------------------------
-    if not lawn.contains(arc):
-        print('out of bounds')
-        return None
-    if any(arc.intersects(h) for h in hole_polygons):
-        print('fell in a hole')
-        return None
-
-    return arc
-    '''
-
+   
+   
 # ---------------------------------------------------------
 
 # 9. Build continuous path
@@ -857,17 +752,23 @@ for i, ln in enumerate(ordered_passes):
     coords = list(ln.coords)
 
     if i == 0:
-        continuous_coords.extend(coords)
-    else:
-        prev_end = continuous_coords[-1]
-        curr_start = coords[0]
-
-        # Direction of previous and next passes (for tangency)
-        prev_line = ordered_passes[i - 1]
-        prev_dir = np.array(prev_line.coords[-1]) - np.array(prev_line.coords[-2])
-        next_dir = np.array(ln.coords[1]) - np.array(ln.coords[0])
+        continuous_coords.extend(list(ln.segmentize(INTERPOLATION_DISTANCE).coords))
+        # ~ continuous_coords.extend(coords)
         
+    else:
+        # create interpolated points along line
+        continuous_coords.extend(list(ln.segmentize(INTERPOLATION_DISTANCE).coords))
+        
+        # add arcs between passes if desired
         if ADD_ARCS:
+            # endpoints for tangency
+            prev_end = continuous_coords[-1]
+            curr_start = coords[0]        
+            # Direction of previous and next passes (for tangency)
+            prev_line = ordered_passes[i - 1]
+            prev_dir = np.array(prev_line.coords[-1]) - np.array(prev_line.coords[-2])
+            next_dir = np.array(ln.coords[1]) - np.array(ln.coords[0])
+        
             arc = tangent_arc_between_passes(
                 prev_end,
                 curr_start,
@@ -879,15 +780,7 @@ for i, ln in enumerate(ordered_passes):
 
             if arc is not None:
                 continuous_coords.extend(list(arc.coords))
-                # ~ print(f'arc got {arc}')
-
-        if coords[0] == continuous_coords[-1]:
-            continuous_coords.extend(coords[1:])
-            # ~ print(f'coords were {coords} | using {coords[1:]}')
-        else:
-            continuous_coords.extend(coords)
-            # ~ print(f'adding {coords}')
-        # ~ print('')
+                if VERBOSE: print(f'arc got {arc}')
  
 
 # ---------------------------------------------------------
@@ -929,41 +822,30 @@ print("Exported mowing_path.txt with", len(continuous_coords), "points")
 fig, ax = plt.subplots(figsize=(8, 8))
 
  
-
 # Lawn boundary
-
 lx, ly = lawn.exterior.xy
-
 ax.plot(lx, ly, color="black", linewidth=2, label="Lawn boundary")
 
 
 # Holes
-
 for hole in holes_local:
-
     hx, hy = zip(*hole)
-
     ax.plot(hx, hy, color="orange", linewidth=2, label="No-go zone")
-
+    
 
 # Safe boundary
-
 if hasattr(lawn_safe,"exterior"):
     sx, sy = lawn_safe.exterior.xy
-
     ax.plot(sx, sy, color="green", linestyle="--", label="Safe boundary")
 else:
     print('lawn_safe could not be made with intersecting polygons.')
+    
 
- 
 # Continuous path
-
 cx = [p[0] for p in continuous_coords]
-
 cy = [p[1] for p in continuous_coords]
 
 
- 
 # Make plot
 
 ax.set_aspect("equal")
@@ -974,8 +856,8 @@ if ANIMATED:
     plt.title("Mowing Progress with Holes")
     
     line, = ax.plot([],[],color="red", linewidth=2)
-    ax.set_xlim(min(cx),max(cx))
-    ax.set_ylim(min(cy),max(cy))
+    ax.set_xlim(min(lx),max(lx))
+    ax.set_ylim(min(ly),max(ly))
     
     # animation helpers
     def aniInit():
@@ -985,7 +867,7 @@ if ANIMATED:
         line.set_data(cx[:lineFrame], cy[:lineFrame])
         return (line,)
     
-    ani = animo.FuncAnimation(fig, frameUpdate, frames = len(cx), init_func = aniInit, interval = 80, blit = True)
+    ani = animo.FuncAnimation(fig, frameUpdate, frames = len(cx), init_func = aniInit, interval = 20, blit = True)
     
 else:
 
@@ -999,6 +881,7 @@ else:
         x, y = ln.xy
         ax.plot(x, y, color="red")
     
-    ax.plot(cx, cy, color="red", linewidth=1.5, label="Continuous path")  #hide to see which passes are reversed
-    
+    #hide to see which passes are reversed
+    ax.plot(cx, cy, color="red", linewidth=1.5, label="Continuous path") 
+
 plt.show()
